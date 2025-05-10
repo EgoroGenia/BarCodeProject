@@ -100,14 +100,14 @@
             this.btnHighlightBarcode.Name = "btnHighlightBarcode";
             this.btnHighlightBarcode.Size = new System.Drawing.Size(180, 22);
             this.btnHighlightBarcode.Text = "Распознать";
-            this.btnHighlightBarcode.Click += new System.EventHandler(this.btnDecodeBarcode_Click);
+            this.btnHighlightBarcode.Click += new System.EventHandler(this.btnHighlightBarcode_Click);
             // 
             // btnDecodeBarcode
             // 
             this.btnDecodeBarcode.Name = "btnDecodeBarcode";
             this.btnDecodeBarcode.Size = new System.Drawing.Size(180, 22);
             this.btnDecodeBarcode.Text = "Расшифровать";
-            this.btnDecodeBarcode.Click += new System.EventHandler(this.btnHighlightBarcode_Click);
+            this.btnDecodeBarcode.Click += new System.EventHandler(this.btnDecodeBarcode_Click);
             // 
             // lblResult
             // 

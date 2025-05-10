@@ -81,6 +81,27 @@ namespace BarcodeDecoderWinForms
         }
 
         // Обработчик для кнопки "Распознать" (выделить штрих-код)
+        //private void btnHighlightBarcode_Click(object sender, EventArgs e)
+        //{
+        //    if (_barcodeImage == null)
+        //    {
+        //        txtResult.Text = "Сначала откройте изображение.";
+        //        return;
+        //    }
+
+        //    // Выделяем штрих-код и отображаем его
+        //    _barcodeRegion = _barcodeImage.DetectBarcodeRegion();
+        //    if (_barcodeRegion == Rectangle.Empty)
+        //    {
+        //        txtResult.Text = "Штрих-код не найден.";
+        //        pictureBox.Image = new Bitmap(_originalImage); // Возвращаем оригинальное изображение
+        //        return;
+        //    }
+
+        //    Bitmap highlightedImage = _barcodeImage.HighlightBarcode();
+        //    pictureBox.Image = highlightedImage;
+        //    txtResult.Text = "Штрих-код выделен.";
+        //}
         private void btnHighlightBarcode_Click(object sender, EventArgs e)
         {
             if (_barcodeImage == null)
@@ -89,19 +110,38 @@ namespace BarcodeDecoderWinForms
                 return;
             }
 
-            // Выделяем штрих-код и отображаем его
+            // Выделяем штрих-код
             _barcodeRegion = _barcodeImage.DetectBarcodeRegion();
+
+            Bitmap highlightedImage;
+
             if (_barcodeRegion == Rectangle.Empty)
             {
                 txtResult.Text = "Штрих-код не найден.";
-                pictureBox.Image = new Bitmap(_originalImage); // Возвращаем оригинальное изображение
-                return;
+                highlightedImage = new Bitmap(_originalImage); // Используем оригинальное изображение
+            }
+            else
+            {
+                txtResult.Text = "Штрих-код выделен.";
+                highlightedImage = _barcodeImage.HighlightBarcode(); // Подсвечиваем найденный штрих-код
             }
 
-            Bitmap highlightedImage = _barcodeImage.HighlightBarcode();
             pictureBox.Image = highlightedImage;
-            txtResult.Text = "Штрих-код выделен.";
+
+            // Сохраняем все этапы обработки
+            try
+            {
+               
+                highlightedImage.Save("5_highlighted.png");
+
+                txtResult.AppendText("\r\nИзображения сохранены рядом с .exe файлом.");
+            }
+            catch (Exception ex)
+            {
+                txtResult.AppendText($"\r\nОшибка при сохранении: {ex.Message}");
+            }
         }
+
 
         // Обработчик для кнопки "Расшифровать"
         private void btnDecodeBarcode_Click(object sender, EventArgs e)
