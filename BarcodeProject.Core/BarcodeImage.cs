@@ -25,7 +25,6 @@ public class BarcodeImage
         _grayImage = ConvertToGrayscale(_image);
     }
 
-    // Convert image to grayscale
     private int[,] ConvertToGrayscale(Bitmap bmp)
     {
         int width = bmp.Width;
@@ -37,7 +36,6 @@ public class BarcodeImage
             for (int x = 0; x < width; x++)
             {
                 Color pixel = bmp.GetPixel(x, y);
-                // ITU-R 601-2 luma transform
                 int luminance = (int)(0.299 * pixel.R + 0.587 * pixel.G + 0.114 * pixel.B);
                 gray[x, y] = luminance;
             }
@@ -47,7 +45,6 @@ public class BarcodeImage
         return gray;
     }
 
-    // Apply Gaussian Blur (5x5 kernel)
     private int[,] GaussianBlur(int[,] input)
     {
         int width = _image.Width;
@@ -78,7 +75,6 @@ public class BarcodeImage
         return result;
     }
 
-    // Apply Sobel operator for horizontal gradient
     private int[,] SobelHorizontal(int[,] input)
     {
         int width = _image.Width;
@@ -99,28 +95,7 @@ public class BarcodeImage
         SaveArrayAsImage(gradX, "3_gradient.png");
         return gradX;
     }
-    private int[,] Sobel(int[,] input)
-    {
-        int width = _image.Width;
-        int height = _image.Height;
-        int[,] grad = new int[width, height];
 
-        for (int y = 1; y < height - 1; y++)
-        {
-            for (int x = 1; x < width - 1; x++)
-            {
-                int gx = -input[x - 1, y - 1] - 2 * input[x - 1, y] - input[x - 1, y + 1] +
-                         input[x + 1, y - 1] + 2 * input[x + 1, y] + input[x + 1, y + 1];
-                int gy = -input[x - 1, y - 1] - 2 * input[x, y - 1] - input[x + 1, y - 1] +
-                         input[x - 1, y + 1] + 2 * input[x, y + 1] + input[x + 1, y + 1];
-                grad[x, y] = Math.Min(255, (int)Math.Sqrt(gx * gx + gy * gy));
-            }
-        }
-        SaveArrayAsImage(grad, "3_gradient.png");
-        return grad;
-    }
-
-    // Morphological closing 
     private int[,] MorphologicalClosing(int[,] input)
     {
         int width = _image.Width;
@@ -128,11 +103,9 @@ public class BarcodeImage
         int[,] dilated = new int[width, height];
         int[,] result = new int[width, height];
 
-        // Адаптивный размер ядра
-        int kw = Math.Max(7, width / 50); // Минимальная ширина 7, масштабируется по ширине изображения
-        int kh = Math.Max(3, height / 100); // Минимальная высота 3, масштабируется по высоте
+        int kw = Math.Max(7, width / 50);
+        int kh = Math.Max(3, height / 100);
 
-        // Dilation
         for (int y = kh / 2; y < height - kh / 2; y++)
         {
             for (int x = kw / 2; x < width - kw / 2; x++)
@@ -150,7 +123,6 @@ public class BarcodeImage
             }
         }
 
-        // Erosion
         for (int y = kh / 2; y < height - kh / 2; y++)
         {
             for (int x = kw / 2; x < width - kw / 2; x++)
@@ -172,14 +144,12 @@ public class BarcodeImage
         return result;
     }
 
-    // Adaptive thresholding
     private int[,] AdaptiveThreshold(int[,] input)
     {
         int width = _image.Width;
         int height = _image.Height;
         int[,] result = new int[width, height];
 
-        // Шаг 1: Глобальная пороговая обработка (Оцу)
         int otsuThreshold = ComputeOtsuThreshold(input);
         int[,] globalResult = new int[width, height];
         for (int y = 0; y < height; y++)
@@ -189,14 +159,13 @@ public class BarcodeImage
                 globalResult[x, y] = input[x, y] >= otsuThreshold ? 255 : 0;
             }
         }
-        SaveArrayAsImage(globalResult, "5_otsu.png"); // Для отладки
+        SaveArrayAsImage(globalResult, "5_otsu.png");
 
-        // Шаг 2: Адаптивная пороговая обработка
         int blockSize = Math.Max(11, Math.Min(width, height) / 50);
         if (blockSize % 2 == 0) blockSize++;
-        double contrastThreshold = 0.08; // Мягкий порог для дисперсии
-        double scaleFactor = 0.3; // Умеренное усиление порога
-        double transitionThreshold = 0.2; // Мягкий порог для переходов
+        double contrastThreshold = 0.08;
+        double scaleFactor = 0.3;
+        double transitionThreshold = 0.2;
 
         for (int y = blockSize / 2; y < height - blockSize / 2; y++)
         {
@@ -208,7 +177,6 @@ public class BarcodeImage
                 int transitions = 0;
                 int lastValue = -1;
 
-                // Вычисление локальной суммы, дисперсии и переходов
                 for (int ky = -blockSize / 2; ky <= blockSize / 2; ky++)
                 {
                     for (int kx = -blockSize / 2; kx <= blockSize / 2; kx++)
@@ -235,14 +203,12 @@ public class BarcodeImage
                 double variance = (sumSquared / count) - (mean * mean);
                 double stdDev = Math.Sqrt(Math.Max(variance, 0));
 
-                // Комбинированный порог
                 double adaptiveThreshold = mean + (stdDev * scaleFactor);
                 bool isOtsuWhite = globalResult[x, y] == 255;
                 bool isAdaptiveWhite = input[x, y] > adaptiveThreshold &&
                                       stdDev >= contrastThreshold * 255 &&
                                       transitions >= blockSize * transitionThreshold;
 
-                // Пиксель белый, если он белый по Оцу ИЛИ проходит адаптивные критерии
                 result[x, y] = (isOtsuWhite || isAdaptiveWhite) ? 255 : 0;
             }
         }
@@ -251,7 +217,6 @@ public class BarcodeImage
         return result;
     }
 
-    // Вспомогательный метод для вычисления порога Оцу
     private int ComputeOtsuThreshold(int[,] input)
     {
         int width = input.GetLength(0);
@@ -259,7 +224,6 @@ public class BarcodeImage
         int[] histogram = new int[256];
         int totalPixels = width * height;
 
-        // Построение гистограммы
         for (int y = 0; y < height; y++)
         {
             for (int x = 0; x < width; x++)
@@ -268,7 +232,6 @@ public class BarcodeImage
             }
         }
 
-        // Метод Оцу
         float sum = 0;
         for (int i = 0; i < 256; i++)
         {
@@ -300,7 +263,6 @@ public class BarcodeImage
         return threshold;
     }
 
-    // Simple contour detection
     private Rectangle[] FindContours(int[,] binary)
     {
         int width = _image.Width;
@@ -308,7 +270,6 @@ public class BarcodeImage
         bool[,] visited = new bool[width, height];
         var rectangles = new List<Rectangle>();
 
-        // Шаг 1: Поиск связных компонент
         for (int y = 0; y < height; y++)
         {
             for (int x = 0; x < width; x++)
@@ -321,7 +282,6 @@ public class BarcodeImage
                     visited[x, y] = true;
                     int whitePixelCount = 1;
 
-                    // Flood Fill для определения границ
                     while (stack.Count > 0)
                     {
                         var p = stack.Pop();
@@ -349,11 +309,10 @@ public class BarcodeImage
 
                     int w = maxX - minX + 1;
                     int h = maxY - minY + 1;
-                    int minWidth = width / 20; // Смягчено для мелких штрих-кодов
+                    int minWidth = width / 20;
                     int minHeight = height / 40;
                     double fillRatio = whitePixelCount / (double)(w * h);
 
-                    // Фильтрация по геометрическим критериям
                     if (w > minWidth && h > minHeight && w / (float)h > 1.5 && fillRatio > 0.3)
                     {
                         rectangles.Add(new Rectangle(minX, minY, w, h));
@@ -362,16 +321,11 @@ public class BarcodeImage
             }
         }
 
-        // Шаг 2: Объединение близко расположенных контуров
         var mergedRectangles = MergeCloseRectangles(rectangles, binary, width / 20, height / 20);
-
-        // Шаг 3: Сохранение контрольного изображения
         SaveContoursImage(binary, mergedRectangles, "6_contours.png");
-
         return mergedRectangles.ToArray();
     }
 
-    // Вспомогательный метод для объединения близких прямоугольников
     private List<Rectangle> MergeCloseRectangles(List<Rectangle> rectangles, int[,] binary, int maxDx, int maxDy)
     {
         var merged = new List<Rectangle>();
@@ -386,7 +340,6 @@ public class BarcodeImage
             int minY = current.Y, maxY = current.Y + current.Height - 1;
             int whitePixelCount = 0;
 
-            // Подсчет белых пикселей в текущем прямоугольнике
             for (int y = Math.Max(0, current.Y); y < Math.Min(_image.Height, current.Y + current.Height); y++)
             {
                 for (int x = Math.Max(0, current.X); x < Math.Min(_image.Width, current.X + current.Width); x++)
@@ -400,7 +353,6 @@ public class BarcodeImage
 
             used[i] = true;
 
-            // Проверка соседних прямоугольников
             for (int j = i + 1; j < rectangles.Count; j++)
             {
                 if (used[j]) continue;
@@ -413,7 +365,6 @@ public class BarcodeImage
                     Math.Abs(current.Y - other.Y),
                     Math.Abs((current.Y + current.Height) - (other.Y + other.Height)));
 
-                // Если прямоугольники близко, объединяем
                 if (dx <= maxDx && dy <= maxDy)
                 {
                     minX = Math.Min(minX, other.X);
@@ -421,7 +372,6 @@ public class BarcodeImage
                     minY = Math.Min(minY, other.Y);
                     maxY = Math.Max(maxY, other.Y + other.Height - 1);
 
-                    // Добавляем белые пиксели из другого прямоугольника
                     for (int y = Math.Max(0, other.Y); y < Math.Min(_image.Height, other.Y + other.Height); y++)
                     {
                         for (int x = Math.Max(0, other.X); x < Math.Min(_image.Width, other.X + other.Width); x++)
@@ -441,7 +391,6 @@ public class BarcodeImage
             int h = maxY - minY + 1;
             double newFillRatio = whitePixelCount / (double)(w * h);
 
-            // Проверка объединенного прямоугольника
             if (w / (float)h > 1.5 && newFillRatio > 0.3)
             {
                 merged.Add(new Rectangle(minX, minY, w, h));
@@ -451,218 +400,183 @@ public class BarcodeImage
         return merged;
     }
 
-    // Вспомогательный метод для сохранения контрольного изображения
     private void SaveContoursImage(int[,] binary, List<Rectangle> rectangles, string filename)
     {
         int width = _image.Width;
         int height = _image.Height;
-        Bitmap bitmap = new Bitmap(width, height, PixelFormat.Format24bppRgb);
-
-        // Копируем бинарное изображение
-        for (int y = 0; y < height; y++)
+        using (Bitmap bitmap = new Bitmap(width, height, PixelFormat.Format24bppRgb))
         {
-            for (int x = 0; x < width; x++)
+            for (int y = 0; y < height; y++)
             {
-                int value = binary[x, y];
-                Color color = value == 255 ? Color.White : Color.Black;
-                bitmap.SetPixel(x, y, color);
+                for (int x = 0; x < width; x++)
+                {
+                    int value = binary[x, y];
+                    Color color = value == 255 ? Color.White : Color.Black;
+                    bitmap.SetPixel(x, y, color);
+                }
+            }
+
+            using (Graphics g = Graphics.FromImage(bitmap))
+            {
+                int padding = 5;
+                foreach (var rect in rectangles)
+                {
+                    int newX = Math.Max(0, rect.X - padding);
+                    int newY = Math.Max(0, rect.Y - padding);
+                    int newWidth = Math.Min(width - newX, rect.Width + 2 * padding);
+                    int newHeight = Math.Min(height - newY, rect.Height + 2 * padding);
+                    g.DrawRectangle(Pens.Red, newX, newY, newWidth - 1, newHeight - 1);
+                }
+            }
+
+            try
+            {
+                bitmap.Save(filename, ImageFormat.Png);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error saving {filename}: {ex.Message}");
             }
         }
-
-        // Отрисовка прямоугольников
-        using (Graphics g = Graphics.FromImage(bitmap))
-        {
-            foreach (var rect in rectangles)
-            {
-                g.DrawRectangle(Pens.Red, rect.X, rect.Y, rect.Width - 1, rect.Height - 1);
-            }
-        }
-
-        bitmap.Save(filename, ImageFormat.Png);
     }
 
-    // Helper method to save int[,] as Bitmap
     private void SaveArrayAsImage(int[,] data, string filename)
     {
         int width = data.GetLength(0);
         int height = data.GetLength(1);
-        Bitmap bmp = new Bitmap(width, height, PixelFormat.Format24bppRgb);
-
-        for (int y = 0; y < height; y++)
+        using (Bitmap bmp = new Bitmap(width, height, PixelFormat.Format24bppRgb))
         {
-            for (int x = 0; x < width; x++)
+            for (int y = 0; y < height; y++)
             {
-                int value = data[x, y];
-                if (value < 0) value = 0;
-                if (value > 255) value = 255;
-                Color color = Color.FromArgb(value, value, value);
-                bmp.SetPixel(x, y, color);
+                for (int x = 0; x < width; x++)
+                {
+                    int value = data[x, y];
+                    if (value < 0) value = 0;
+                    if (value > 255) value = 255;
+                    Color color = Color.FromArgb(value, value, value);
+                    bmp.SetPixel(x, y, color);
+                }
             }
-        }
 
-        try
-        {
-            bmp.Save(filename, ImageFormat.Png);
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Error saving {filename}: {ex.Message}");
+            try
+            {
+                bmp.Save(filename, ImageFormat.Png);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error saving {filename}: {ex.Message}");
+            }
         }
     }
 
-    // Helper method to save a cropped region as Bitmap
     private void SaveRegionAsImage(int[,] data, Rectangle region, string filename)
     {
         int width = region.Width;
         int height = region.Height;
-        Bitmap bmp = new Bitmap(width, height, PixelFormat.Format24bppRgb);
-
-        for (int y = 0; y < height; y++)
+        using (Bitmap bmp = new Bitmap(width, height, PixelFormat.Format24bppRgb))
         {
-            for (int x = 0; x < width; x++)
+            for (int y = 0; y < height; y++)
             {
-                int value = data[region.X + x, region.Y + y];
-                if (value < 0) value = 0;
-                if (value > 255) value = 255;
-                Color color = Color.FromArgb(value, value, value);
-                bmp.SetPixel(x, y, color);
+                for (int x = 0; x < width; x++)
+                {
+                    int value = data[region.X + x, region.Y + y];
+                    if (value < 0) value = 0;
+                    if (value > 255) value = 255;
+                    Color color = Color.FromArgb(value, value, value);
+                    bmp.SetPixel(x, y, color);
+                }
+            }
+
+            try
+            {
+                bmp.Save(filename, ImageFormat.Png);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error saving {filename}: {ex.Message}");
             }
         }
-
-        try
-        {
-            bmp.Save(filename, ImageFormat.Png);
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Error saving {filename}: {ex.Message}");
-        }
     }
 
-    // Apply CLAHE (simplified version)
     private int[,] ApplyCLAHE(int[,] input, Rectangle region)
-{
-    // Проверка корректности региона
-    if (region.IsEmpty || region.Width <= 0 || region.Height <= 0)
     {
-        return input; // Возвращаем исходное изображение, если регион некорректен
-    }
+        int width = region.Width;
+        int height = region.Height;
+        int[,] result = new int[_image.Width, _image.Height];
+        int tileSize = 8;
+        int clipLimit = 2;
 
-    // Ограничение региона границами изображения
-    region = Rectangle.Intersect(region, new Rectangle(0, 0, _image.Width, _image.Height));
-    if (region.IsEmpty)
-    {
-        return input;
-    }
-
-    int width = region.Width;
-    int height = region.Height;
-    int[,] result = new int[_image.Width, _image.Height];
-    int tileSize = 8;
-    int clipLimit = 2;
-
-    // Копируем входное изображение в результат для необрабатываемых областей
-    for (int y = 0; y < _image.Height; y++)
-    {
-        for (int x = 0; x < _image.Width; x++)
+        for (int ty = 0; ty < height; ty += tileSize)
         {
-            result[x, y] = input[x, y];
-        }
-    }
-
-    // Compute histogram for each tile
-    for (int ty = 0; ty < height; ty += tileSize)
-    {
-        for (int tx = 0; tx < width; tx += tileSize)
-        {
-            int[] histogram = new int[256];
-            int pixelCount = 0;
-
-            // Build histogram
-            for (int y = ty; y < Math.Min(ty + tileSize, height); y++)
+            for (int tx = 0; tx < width; tx += tileSize)
             {
-                for (int x = tx; x < Math.Min(tx + tileSize, width); x++)
+                int[] histogram = new int[256];
+                int pixelCount = 0;
+
+                for (int y = ty; y < Math.Min(ty + tileSize, height); y++)
                 {
-                    int value = input[region.X + x, region.Y + y];
-                    if (value >= 0 && value < 256) // Проверка корректности значения
+                    for (int x = tx; x < Math.Min(tx + tileSize, width); x++)
                     {
+                        int value = input[region.X + x, region.Y + y];
                         histogram[value]++;
                         pixelCount++;
                     }
                 }
-            }
 
-            // Если тайл пустой или содержит мало пикселей, пропускаем обработку
-            if (pixelCount == 0)
-            {
-                continue;
-            }
-
-            // Clip histogram
-            int clipThreshold = pixelCount / 256 * clipLimit;
-            int clippedPixels = 0;
-            for (int i = 0; i < 256; i++)
-            {
-                if (histogram[i] > clipThreshold)
+                int clipThreshold = pixelCount / 256 * clipLimit;
+                int clippedPixels = 0;
+                for (int i = 0; i < 256; i++)
                 {
-                    clippedPixels += histogram[i] - clipThreshold;
-                    histogram[i] = clipThreshold;
-                }
-            }
-            int perBin = clippedPixels / 256;
-            for (int i = 0; i < 256; i++)
-            {
-                histogram[i] += perBin;
-            }
-
-            // Compute CDF
-            int[] cdf = new int[256];
-            cdf[0] = histogram[0];
-            for (int i = 1; i < 256; i++)
-            {
-                cdf[i] = cdf[i - 1] + histogram[i];
-            }
-
-            // Находим минимальное ненулевое значение CDF
-            int cdfMin = 0;
-            for (int i = 0; i < 256; i++)
-            {
-                if (cdf[i] > 0)
-                {
-                    cdfMin = cdf[i];
-                    break;
-                }
-            }
-            int cdfMax = cdf[255];
-
-            // Apply transformation
-            for (int y = ty; y < Math.Min(ty + tileSize, height); y++)
-            {
-                for (int x = tx; x < Math.Min(tx + tileSize, width); x++)
-                {
-                    int value = input[region.X + x, region.Y + y];
-                    if (value >= 0 && value < 256)
+                    if (histogram[i] > clipThreshold)
                     {
+                        clippedPixels += histogram[i] - clipThreshold;
+                        histogram[i] = clipThreshold;
+                    }
+                }
+                int perBin = clippedPixels / 256;
+                for (int i = 0; i < 256; i++)
+                {
+                    histogram[i] += perBin;
+                }
+
+                int[] cdf = new int[256];
+                cdf[0] = histogram[0];
+                for (int i = 1; i < 256; i++)
+                {
+                    cdf[i] = cdf[i - 1] + histogram[i];
+                }
+                int cdfMin = 0;
+                for (int i = 0; i < 256; i++)
+                {
+                    if (cdf[i] > 0)
+                    {
+                        cdfMin = cdf[i];
+                        break;
+                    }
+                }
+                int cdfMax = cdf[255];
+
+                for (int y = ty; y < Math.Min(ty + tileSize, height); y++)
+                {
+                    for (int x = tx; x < Math.Min(tx + tileSize, width); x++)
+                    {
+                        int value = input[region.X + x, region.Y + y];
                         int newValue = cdfMax == cdfMin ? value : ((cdf[value] - cdfMin) * 255) / (cdfMax - cdfMin);
-                        result[region.X + x, region.Y + y] = Math.Max(0, Math.Min(255, newValue));
+                        result[region.X + x, region.Y + y] = newValue;
                     }
                 }
             }
         }
+
+        return result;
     }
 
-    SaveArrayAsImage(result, "2_clahe.png"); // Для отладки
-    return result;
-}
-
-    // Otsu thresholding
     private int[,] OtsuThreshold(int[,] input, Rectangle region)
     {
         int width = region.Width;
         int height = region.Height;
         int[,] result = new int[_image.Width, _image.Height];
 
-        // Compute histogram
         int[] histogram = new int[256];
         int totalPixels = width * height;
         for (int y = 0; y < height; y++)
@@ -673,7 +587,6 @@ public class BarcodeImage
             }
         }
 
-        // Otsu's method
         float sum = 0;
         for (int i = 0; i < 256; i++)
         {
@@ -702,7 +615,6 @@ public class BarcodeImage
             }
         }
 
-        // Apply threshold
         for (int y = 0; y < height; y++)
         {
             for (int x = 0; x < width; x++)
@@ -717,23 +629,12 @@ public class BarcodeImage
 
     public Rectangle DetectBarcodeRegion()
     {
-        int[,] enhanced = ApplyCLAHE(_grayImage, new Rectangle(0, 0, _image.Width, _image.Height));
-        // Step 1: Noise reduction
-        int[,] blurred = GaussianBlur(enhanced);
-
-        // Step 2: Gradient analysis
+        int[,] blurred = GaussianBlur(_grayImage);
         int[,] gradX = SobelHorizontal(blurred);
-
-        // Step 3: Morphological closing
         int[,] closed = MorphologicalClosing(gradX);
-
-        // Step 4: Adaptive thresholding
         int[,] thresh = AdaptiveThreshold(closed);
-
-        // Step 5: Contour detection
         var contours = FindContours(thresh);
 
-        // Select the largest valid rectangle
         if (contours.Length == 0)
         {
             _barcodeRegion = Rectangle.Empty;
@@ -748,28 +649,28 @@ public class BarcodeImage
 
     public Bitmap HighlightBarcode()
     {
-        Bitmap result = new Bitmap(_image);
-        if (_barcodeRegion != Rectangle.Empty)
+        using (Bitmap result = new Bitmap(_image))
         {
-            using (Graphics g = Graphics.FromImage(result))
+            if (_barcodeRegion != Rectangle.Empty)
             {
+                using (Graphics g = Graphics.FromImage(result))
                 using (Pen pen = new Pen(Color.Red, 3))
                 {
                     g.DrawRectangle(pen, _barcodeRegion);
                 }
             }
-        }
 
-        try
-        {
-            result.Save("6_highlighted.png", ImageFormat.Png);
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Error saving 6_highlighted.png: {ex.Message}");
-        }
+            try
+            {
+                result.Save("6_highlighted.png", ImageFormat.Png);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error saving 6_highlighted.png: {ex.Message}");
+            }
 
-        return result;
+            return new Bitmap(result);
+        }
     }
 
     public int[] GetProfileFromRegion(Rectangle region)
@@ -779,14 +680,12 @@ public class BarcodeImage
             return new int[0];
         }
 
-        // Ensure region is within image bounds
         region = Rectangle.Intersect(region, new Rectangle(0, 0, _image.Width, _image.Height));
         if (region.IsEmpty)
         {
             return new int[0];
         }
 
-        // Extract ROI
         int[,] roi = new int[region.Width, region.Height];
         for (int y = 0; y < region.Height; y++)
         {
@@ -797,15 +696,12 @@ public class BarcodeImage
         }
         SaveArrayAsImage(roi, "7_roi.png");
 
-        // Apply CLAHE
         int[,] clahe = ApplyCLAHE(_grayImage, region);
         SaveRegionAsImage(clahe, region, "8_clahe.png");
 
-        // Binarize with Otsu
         int[,] binary = OtsuThreshold(clahe, region);
         SaveRegionAsImage(binary, region, "9_binary.png");
 
-        // Compute profile by summing along vertical axis
         int[] profile = new int[region.Width];
         for (int x = 0; x < region.Width; x++)
         {
