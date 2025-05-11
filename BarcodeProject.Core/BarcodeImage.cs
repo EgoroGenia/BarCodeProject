@@ -1,783 +1,773 @@
 ﻿using System;
-using System.Drawing;
 using System.Collections.Generic;
+using System.Drawing;
+using System.Drawing.Imaging;
 using System.Linq;
 
-namespace BarcodeProject.Core
+public class BarcodeImage
 {
-    public class BarcodeImage
+    private Bitmap _image;
+    private int[,] _grayImage;
+    private Rectangle _barcodeRegion;
+
+    public BarcodeImage(Bitmap image)
     {
-        private Bitmap _bitmap;
+        _image = image ?? throw new ArgumentNullException(nameof(image));
+        _grayImage = ConvertToGrayscale(_image);
+    }
 
-        public BarcodeImage(string imagePath)
+    public BarcodeImage(string filePath)
+    {
+        using (Bitmap temp = new Bitmap(filePath))
         {
-            _bitmap = new Bitmap(imagePath);
+            _image = new Bitmap(temp);
         }
+        _grayImage = ConvertToGrayscale(_image);
+    }
 
-        // Преобразование изображения в градации серого
-        private int[,] ToGrayscale()
+    // Convert image to grayscale
+    private int[,] ConvertToGrayscale(Bitmap bmp)
+    {
+        int width = bmp.Width;
+        int height = bmp.Height;
+        int[,] gray = new int[width, height];
+
+        for (int y = 0; y < height; y++)
         {
-            int width = _bitmap.Width;
-            int height = _bitmap.Height;
-            int[,] grayscale = new int[width, height];
-
             for (int x = 0; x < width; x++)
             {
-                for (int y = 0; y < height; y++)
-                {
-                    Color pixel = _bitmap.GetPixel(x, y);
-                    grayscale[x, y] = (int)(pixel.R * 0.3 + pixel.G * 0.59 + pixel.B * 0.11);
-                }
+                Color pixel = bmp.GetPixel(x, y);
+                // ITU-R 601-2 luma transform
+                int luminance = (int)(0.299 * pixel.R + 0.587 * pixel.G + 0.114 * pixel.B);
+                gray[x, y] = luminance;
             }
-            return grayscale;
         }
 
-        // Медианный фильтр для устранения импульсного шума
-        private int[,] ApplyMedianFilter(int[,] input, int kernelSize = 5)
-        {
-            int width = _bitmap.Width;
-            int height = _bitmap.Height;
-            int[,] filtered = new int[width, height];
-            int offset = kernelSize / 2;
+        SaveArrayAsImage(gray, "1_grayscale.png");
+        return gray;
+    }
 
-            for (int x = 0; x < width; x++)
+    // Apply Gaussian Blur (5x5 kernel)
+    private int[,] GaussianBlur(int[,] input)
+    {
+        int width = _image.Width;
+        int height = _image.Height;
+        int[,] result = new int[width, height];
+        float[] kernel = { 1, 4, 6, 4, 1, 4, 16, 24, 16, 4, 6, 24, 36, 24, 6, 4, 16, 24, 16, 4, 1, 4, 6, 4, 1 };
+        float kernelSum = 256;
+
+        for (int y = 2; y < height - 2; y++)
+        {
+            for (int x = 2; x < width - 2; x++)
             {
-                for (int y = 0; y < height; y++)
+                float sum = 0;
+                int k = 0;
+                for (int ky = -2; ky <= 2; ky++)
                 {
-                    List<int> neighbors = new List<int>();
-                    for (int dx = -offset; dx <= offset; dx++)
+                    for (int kx = -2; kx <= 2; kx++)
                     {
-                        for (int dy = -offset; dy <= offset; dy++)
-                        {
-                            int nx = Math.Min(Math.Max(x + dx, 0), width - 1);
-                            int ny = Math.Min(Math.Max(y + dy, 0), height - 1);
-                            neighbors.Add(input[nx, ny]);
-                        }
+                        sum += input[x + kx, y + ky] * kernel[k];
+                        k++;
                     }
-                    neighbors.Sort();
-                    filtered[x, y] = neighbors[neighbors.Count / 2];
                 }
+                result[x, y] = (int)(sum / kernelSum);
             }
-            return filtered;
         }
 
-        // Фильтр Собеля для вычисления градиентов
-        private (double[,] magnitude, double[,] direction) ApplySobelFilter(int[,] grayscale)
+        SaveArrayAsImage(result, "2_blurred.png");
+        return result;
+    }
+
+    // Apply Sobel operator for horizontal gradient
+    private int[,] SobelHorizontal(int[,] input)
+    {
+        int width = _image.Width;
+        int height = _image.Height;
+        int[,] gradX = new int[width, height];
+
+        for (int y = 1; y < height - 1; y++)
         {
-            int width = _bitmap.Width;
-            int height = _bitmap.Height;
-            double[,] magnitude = new double[width, height];
-            double[,] direction = new double[width, height];
-
-            int[,] sobelX = new int[3, 3] { { -1, 0, 1 }, { -2, 0, 2 }, { -1, 0, 1 } };
-            int[,] sobelY = new int[3, 3] { { -1, -2, -1 }, { 0, 0, 0 }, { 1, 2, 1 } };
-
             for (int x = 1; x < width - 1; x++)
             {
-                for (int y = 1; y < height - 1; y++)
+                int gx = -input[x - 1, y - 1] - 2 * input[x - 1, y] - input[x - 1, y + 1] +
+                         input[x + 1, y - 1] + 2 * input[x + 1, y] + input[x + 1, y + 1];
+                gradX[x, y] = Math.Abs(gx);
+                if (gradX[x, y] > 255) gradX[x, y] = 255;
+            }
+        }
+
+        SaveArrayAsImage(gradX, "3_gradient.png");
+        return gradX;
+    }
+
+    // Morphological closing 
+    private int[,] MorphologicalClosing(int[,] input)
+    {
+        int width = _image.Width;
+        int height = _image.Height;
+        int[,] dilated = new int[width, height];
+        int[,] result = new int[width, height];
+
+        // Адаптивный размер ядра
+        int kw = Math.Max(7, width / 50); // Минимальная ширина 7, масштабируется по ширине изображения
+        int kh = Math.Max(3, height / 100); // Минимальная высота 3, масштабируется по высоте
+
+        // Dilation
+        for (int y = kh / 2; y < height - kh / 2; y++)
+        {
+            for (int x = kw / 2; x < width - kw / 2; x++)
+            {
+                int maxVal = 0;
+                for (int ky = -kh / 2; ky <= kh / 2; ky++)
                 {
-                    double gx = 0, gy = 0;
-                    for (int dx = -1; dx <= 1; dx++)
+                    for (int kx = -kw / 2; kx <= kw / 2; kx++)
                     {
+                        int val = input[x + kx, y + ky];
+                        if (val > maxVal) maxVal = val;
+                    }
+                }
+                dilated[x, y] = maxVal;
+            }
+        }
+
+        // Erosion
+        for (int y = kh / 2; y < height - kh / 2; y++)
+        {
+            for (int x = kw / 2; x < width - kw / 2; x++)
+            {
+                int minVal = 255;
+                for (int ky = -kh / 2; ky <= kh / 2; ky++)
+                {
+                    for (int kx = -kw / 2; kx <= kw / 2; kx++)
+                    {
+                        int val = dilated[x + kx, y + ky];
+                        if (val < minVal) minVal = val;
+                    }
+                }
+                result[x, y] = minVal;
+            }
+        }
+
+        SaveArrayAsImage(result, "4_closed.png");
+        return result;
+    }
+
+    // Adaptive thresholding
+    private int[,] AdaptiveThreshold(int[,] input)
+    {
+        int width = _image.Width;
+        int height = _image.Height;
+        int[,] result = new int[width, height];
+
+        // Шаг 1: Глобальная пороговая обработка (Оцу)
+        int otsuThreshold = ComputeOtsuThreshold(input);
+        int[,] globalResult = new int[width, height];
+        for (int y = 0; y < height; y++)
+        {
+            for (int x = 0; x < width; x++)
+            {
+                globalResult[x, y] = input[x, y] >= otsuThreshold ? 255 : 0;
+            }
+        }
+        SaveArrayAsImage(globalResult, "5_otsu.png"); // Для отладки
+
+        // Шаг 2: Адаптивная пороговая обработка
+        int blockSize = Math.Max(11, Math.Min(width, height) / 50);
+        if (blockSize % 2 == 0) blockSize++;
+        double contrastThreshold = 0.08; // Мягкий порог для дисперсии
+        double scaleFactor = 0.3; // Умеренное усиление порога
+        double transitionThreshold = 0.2; // Мягкий порог для переходов
+
+        for (int y = blockSize / 2; y < height - blockSize / 2; y++)
+        {
+            for (int x = blockSize / 2; x < width - blockSize / 2; x++)
+            {
+                double sum = 0;
+                double sumSquared = 0;
+                int count = 0;
+                int transitions = 0;
+                int lastValue = -1;
+
+                // Вычисление локальной суммы, дисперсии и переходов
+                for (int ky = -blockSize / 2; ky <= blockSize / 2; ky++)
+                {
+                    for (int kx = -blockSize / 2; kx <= blockSize / 2; kx++)
+                    {
+                        int value = input[x + kx, y + ky];
+                        sum += value;
+                        sumSquared += value * value;
+                        count++;
+
+                        if (ky == 0 && kx > -blockSize / 2)
+                        {
+                            int currentBin = value > 128 ? 1 : 0;
+                            if (lastValue != -1 && currentBin != lastValue)
+                            {
+                                transitions++;
+                            }
+                            lastValue = currentBin;
+                        }
+                    }
+                    lastValue = -1;
+                }
+
+                double mean = sum / count;
+                double variance = (sumSquared / count) - (mean * mean);
+                double stdDev = Math.Sqrt(Math.Max(variance, 0));
+
+                // Комбинированный порог
+                double adaptiveThreshold = mean + (stdDev * scaleFactor);
+                bool isOtsuWhite = globalResult[x, y] == 255;
+                bool isAdaptiveWhite = input[x, y] > adaptiveThreshold &&
+                                      stdDev >= contrastThreshold * 255 &&
+                                      transitions >= blockSize * transitionThreshold;
+
+                // Пиксель белый, если он белый по Оцу ИЛИ проходит адаптивные критерии
+                result[x, y] = (isOtsuWhite || isAdaptiveWhite) ? 255 : 0;
+            }
+        }
+
+        SaveArrayAsImage(result, "5_threshold.png");
+        return result;
+    }
+
+    // Вспомогательный метод для вычисления порога Оцу
+    private int ComputeOtsuThreshold(int[,] input)
+    {
+        int width = input.GetLength(0);
+        int height = input.GetLength(1);
+        int[] histogram = new int[256];
+        int totalPixels = width * height;
+
+        // Построение гистограммы
+        for (int y = 0; y < height; y++)
+        {
+            for (int x = 0; x < width; x++)
+            {
+                histogram[input[x, y]]++;
+            }
+        }
+
+        // Метод Оцу
+        float sum = 0;
+        for (int i = 0; i < 256; i++)
+        {
+            sum += i * histogram[i];
+        }
+        float sumB = 0;
+        int wB = 0;
+        int wF = 0;
+        float maxVariance = 0;
+        int threshold = 0;
+
+        for (int t = 0; t < 256; t++)
+        {
+            wB += histogram[t];
+            if (wB == 0) continue;
+            wF = totalPixels - wB;
+            if (wF == 0) break;
+            sumB += t * histogram[t];
+            float mB = sumB / wB;
+            float mF = (sum - sumB) / wF;
+            float variance = wB * wF * (mB - mF) * (mB - mF);
+            if (variance > maxVariance)
+            {
+                maxVariance = variance;
+                threshold = t;
+            }
+        }
+
+        return threshold;
+    }
+
+    // Simple contour detection
+    private Rectangle[] FindContours(int[,] binary)
+    {
+        int width = _image.Width;
+        int height = _image.Height;
+        bool[,] visited = new bool[width, height];
+        var rectangles = new List<Rectangle>();
+
+        // Шаг 1: Поиск связных компонент
+        for (int y = 0; y < height; y++)
+        {
+            for (int x = 0; x < width; x++)
+            {
+                if (binary[x, y] == 255 && !visited[x, y])
+                {
+                    int minX = x, maxX = x, minY = y, maxY = y;
+                    var stack = new Stack<Point>();
+                    stack.Push(new Point(x, y));
+                    visited[x, y] = true;
+                    int whitePixelCount = 1;
+
+                    // Flood Fill для определения границ
+                    while (stack.Count > 0)
+                    {
+                        var p = stack.Pop();
+                        if (p.X < minX) minX = p.X;
+                        if (p.X > maxX) maxX = p.X;
+                        if (p.Y < minY) minY = p.Y;
+                        if (p.Y > maxY) maxY = p.Y;
+
                         for (int dy = -1; dy <= 1; dy++)
                         {
-                            int pixel = grayscale[x + dx, y + dy];
-                            gx += pixel * sobelX[dx + 1, dy + 1];
-                            gy += pixel * sobelY[dx + 1, dy + 1];
-                        }
-                    }
-                    magnitude[x, y] = Math.Sqrt(gx * gx + gy * gy);
-                    direction[x, y] = Math.Atan2(gy, gx) * 180 / Math.PI;
-                    if (direction[x, y] < 0) direction[x, y] += 180;
-                }
-            }
-            return (magnitude, direction);
-        }
-
-        // Размытие (Blur) для сглаживания
-        private double[,] ApplyBlur(double[,] input, int kernelSize = 5)
-        {
-            int width = _bitmap.Width;
-            int height = _bitmap.Height;
-            double[,] blurred = new double[width, height];
-            int offset = kernelSize / 2;
-
-            for (int x = 0; x < width; x++)
-            {
-                for (int y = 0; y < height; y++)
-                {
-                    double sum = 0;
-                    int count = 0;
-                    for (int dx = -offset; dx <= offset; dx++)
-                    {
-                        for (int dy = -offset; dy <= offset; dy++)
-                        {
-                            int nx = Math.Min(Math.Max(x + dx, 0), width - 1);
-                            int ny = Math.Min(Math.Max(y + dy, 0), height - 1);
-                            sum += input[nx, ny];
-                            count++;
-                        }
-                    }
-                    blurred[x, y] = sum / count;
-                }
-            }
-            return blurred;
-        }
-
-        // Пороговая бинаризация
-        private int[,] ApplyThreshold(double[,] magnitude, double threshold)
-        {
-            int width = _bitmap.Width;
-            int height = _bitmap.Height;
-            int[,] binary = new int[width, height];
-
-            for (int x = 0; x < width; x++)
-            {
-                for (int y = 0; y < height; y++)
-                {
-                    binary[x, y] = magnitude[x, y] > threshold ? 1 : 0;
-                }
-            }
-            return binary;
-        }
-
-        // Морфологическое закрытие (Дилатация → Эрозия)
-        private int[,] ApplyMorphologicalClosing(int[,] binary, int kernelSize = 5)
-        {
-            int[,] dilated = ApplyDilation(binary, kernelSize);
-            return ApplyErosion(dilated, kernelSize);
-        }
-
-        // Эрозия
-        private int[,] ApplyErosion(int[,] binary, int kernelSize)
-        {
-            int width = _bitmap.Width;
-            int height = _bitmap.Height;
-            int[,] eroded = new int[width, height];
-            int offset = kernelSize / 2;
-
-            for (int x = 0; x < width; x++)
-            {
-                int xMin = Math.Max(x - offset, 0);
-                int xMax = Math.Min(x + offset, width - 1);
-                for (int y = 0; y < height; y++)
-                {
-                    int yMin = Math.Max(y - offset, 0);
-                    int yMax = Math.Min(y + offset, height - 1);
-                    bool allOnes = true;
-                    for (int nx = xMin; nx <= xMax && allOnes; nx++)
-                    {
-                        for (int ny = yMin; ny <= yMax; ny++)
-                        {
-                            if (binary[nx, ny] == 0)
-                            {
-                                allOnes = false;
-                                break;
-                            }
-                        }
-                    }
-                    eroded[x, y] = allOnes ? 1 : 0;
-                }
-            }
-            return eroded;
-        }
-
-        // Дилатация
-        private int[,] ApplyDilation(int[,] binary, int kernelSize)
-        {
-            int width = _bitmap.Width;
-            int height = _bitmap.Height;
-            int[,] dilated = new int[width, height];
-            int offset = kernelSize / 2;
-
-            for (int x = 0; x < width; x++)
-            {
-                int xMin = Math.Max(x - offset, 0);
-                int xMax = Math.Min(x + offset, width - 1);
-                for (int y = 0; y < height; y++)
-                {
-                    int yMin = Math.Max(y - offset, 0);
-                    int yMax = Math.Min(y + offset, height - 1);
-                    bool hasOne = false;
-                    for (int nx = xMin; nx <= xMax && !hasOne; nx++)
-                    {
-                        for (int ny = yMin; ny <= yMax; ny++)
-                        {
-                            if (binary[nx, ny] == 1)
-                            {
-                                hasOne = true;
-                                break;
-                            }
-                        }
-                    }
-                    dilated[x, y] = hasOne ? 1 : 0;
-                }
-            }
-            return dilated;
-        }
-
-        // Морфологическое открытие (Эрозия → Дилатация)
-        private int[,] ApplyMorphologicalOpening(int[,] binary, int kernelSize = 15)
-        {
-            int[,] eroded = ApplyErosion(binary, kernelSize);
-            return ApplyDilation(eroded, kernelSize);
-        }
-
-        // Адаптивный расчет порога (метод Отсу)
-        private double CalculateAdaptiveThreshold(int[,] grayscale)
-        {
-            int width = _bitmap.Width;
-            int height = _bitmap.Height;
-            int[] histogram = new int[256];
-
-            for (int x = 0; x < width; x++)
-                for (int y = 0; y < height; y++)
-                    histogram[grayscale[x, y]]++;
-
-            int total = width * height;
-            double sum = 0;
-            for (int i = 0; i < 256; i++)
-                sum += i * histogram[i];
-
-            double sumB = 0, wB = 0, maxVariance = 0;
-            int threshold = 0;
-            for (int t = 0; t < 256; t++)
-            {
-                wB += histogram[t];
-                if (wB == 0) continue;
-
-                double wF = total - wB;
-                if (wF == 0) break;
-
-                sumB += t * histogram[t];
-                double mB = sumB / wB;
-                double mF = (sum - sumB) / wF;
-
-                double variance = wB * wF * (mB - mF) * (mB - mF);
-                if (variance > maxVariance)
-                {
-                    maxVariance = variance;
-                    threshold = t;
-                }
-            }
-            return threshold;
-        }
-
-        // Адаптивный расчет порога для double[,]
-        private double CalculateAdaptiveThreshold(double[,] magnitude)
-        {
-            int width = _bitmap.Width;
-            int height = _bitmap.Height;
-            int[] histogram = new int[256];
-            double maxMagnitude = magnitude.Cast<double>().Max();
-            if (maxMagnitude == 0) maxMagnitude = 1;
-
-            for (int x = 0; x < width; x++)
-                for (int y = 0; y < height; y++)
-                {
-                    int value = (int)(magnitude[x, y] / maxMagnitude * 255);
-                    histogram[value]++;
-                }
-
-            int total = width * height;
-            double sum = 0;
-            for (int i = 0; i < 256; i++)
-                sum += i * histogram[i];
-
-            double sumB = 0, wB = 0, maxVariance = 0, threshold = 0;
-            for (int t = 0; t < 256; t++)
-            {
-                wB += histogram[t];
-                if (wB == 0) continue;
-
-                double wF = total - wB;
-                if (wF == 0) break;
-
-                sumB += t * histogram[t];
-                double mB = sumB / wB;
-                double mF = (sum - sumB) / wF;
-
-                double variance = wB * wF * (mB - mF) * (mB - mF);
-                if (variance > maxVariance)
-                {
-                    maxVariance = variance;
-                    threshold = t;
-                }
-            }
-
-            double otsuThreshold = (threshold / 255.0) * maxMagnitude;
-            double mean = sum / total / 255.0 * maxMagnitude;
-            if (otsuThreshold < mean * 0.5 || otsuThreshold > mean * 2.0)
-                return mean * 1.5;
-
-            return otsuThreshold;
-        }
-
-        // Поиск контуров
-        private List<Rectangle> FindContours(int[,] binary)
-        {
-            int width = _bitmap.Width;
-            int height = _bitmap.Height;
-            bool[,] visited = new bool[width, height];
-            List<Rectangle> contours = new List<Rectangle>();
-
-            for (int x = 0; x < width; x++)
-            {
-                for (int y = 0; y < height; y++)
-                {
-                    if (binary[x, y] == 1 && !visited[x, y])
-                    {
-                        int minX = x, maxX = x, minY = y, maxY = y;
-                        Queue<(int x, int y)> queue = new Queue<(int x, int y)>();
-                        queue.Enqueue((x, y));
-                        visited[x, y] = true;
-
-                        while (queue.Count > 0)
-                        {
-                            var (cx, cy) = queue.Dequeue();
-                            minX = Math.Min(minX, cx);
-                            maxX = Math.Max(maxX, cx);
-                            minY = Math.Min(minY, cy);
-                            maxY = Math.Max(maxY, cy);
-
                             for (int dx = -1; dx <= 1; dx++)
                             {
-                                for (int dy = -1; dy <= 1; dy++)
+                                int nx = p.X + dx;
+                                int ny = p.Y + dy;
+                                if (nx >= 0 && nx < width && ny >= 0 && ny < height &&
+                                    binary[nx, ny] == 255 && !visited[nx, ny])
                                 {
-                                    int nx = cx + dx;
-                                    int ny = cy + dy;
-                                    if (nx >= 0 && nx < width && ny >= 0 && ny < height &&
-                                        binary[nx, ny] == 1 && !visited[nx, ny])
-                                    {
-                                        queue.Enqueue((nx, ny));
-                                        visited[nx, ny] = true;
-                                    }
+                                    stack.Push(new Point(nx, ny));
+                                    visited[nx, ny] = true;
+                                    whitePixelCount++;
                                 }
                             }
                         }
+                    }
 
-                        Rectangle contour = new Rectangle(minX, minY, maxX - minX + 1, maxY - minY + 1);
-                        float aspectRatio = (float)contour.Width / contour.Height;
+                    int w = maxX - minX + 1;
+                    int h = maxY - minY + 1;
+                    int minWidth = width / 20; // Смягчено для мелких штрих-кодов
+                    int minHeight = height / 40;
+                    double fillRatio = whitePixelCount / (double)(w * h);
 
-                        if (contour.Width * contour.Height > 100 && // Минимальная площадь
-                            contour.Width < width * 0.75 && contour.Height < height * 0.75 && // Максимальный размер
-                            aspectRatio > 1.5f && aspectRatio < 10.0f) // Соотношение сторон
+                    // Фильтрация по геометрическим критериям
+                    if (w > minWidth && h > minHeight && w / (float)h > 1.5 && fillRatio > 0.3)
+                    {
+                        rectangles.Add(new Rectangle(minX, minY, w, h));
+                    }
+                }
+            }
+        }
+
+        // Шаг 2: Объединение близко расположенных контуров
+        var mergedRectangles = MergeCloseRectangles(rectangles, binary, width / 20, height / 20);
+
+        // Шаг 3: Сохранение контрольного изображения
+        SaveContoursImage(binary, mergedRectangles, "6_contours.png");
+
+        return mergedRectangles.ToArray();
+    }
+
+    // Вспомогательный метод для объединения близких прямоугольников
+    private List<Rectangle> MergeCloseRectangles(List<Rectangle> rectangles, int[,] binary, int maxDx, int maxDy)
+    {
+        var merged = new List<Rectangle>();
+        bool[] used = new bool[rectangles.Count];
+
+        for (int i = 0; i < rectangles.Count; i++)
+        {
+            if (used[i]) continue;
+
+            Rectangle current = rectangles[i];
+            int minX = current.X, maxX = current.X + current.Width - 1;
+            int minY = current.Y, maxY = current.Y + current.Height - 1;
+            int whitePixelCount = 0;
+
+            // Подсчет белых пикселей в текущем прямоугольнике
+            for (int y = Math.Max(0, current.Y); y < Math.Min(_image.Height, current.Y + current.Height); y++)
+            {
+                for (int x = Math.Max(0, current.X); x < Math.Min(_image.Width, current.X + current.Width); x++)
+                {
+                    if (binary[x, y] == 255)
+                    {
+                        whitePixelCount++;
+                    }
+                }
+            }
+
+            used[i] = true;
+
+            // Проверка соседних прямоугольников
+            for (int j = i + 1; j < rectangles.Count; j++)
+            {
+                if (used[j]) continue;
+
+                Rectangle other = rectangles[j];
+                int dx = Math.Min(
+                    Math.Abs(current.X - other.X),
+                    Math.Abs((current.X + current.Width) - (other.X + other.Width)));
+                int dy = Math.Min(
+                    Math.Abs(current.Y - other.Y),
+                    Math.Abs((current.Y + current.Height) - (other.Y + other.Height)));
+
+                // Если прямоугольники близко, объединяем
+                if (dx <= maxDx && dy <= maxDy)
+                {
+                    minX = Math.Min(minX, other.X);
+                    maxX = Math.Max(maxX, other.X + other.Width - 1);
+                    minY = Math.Min(minY, other.Y);
+                    maxY = Math.Max(maxY, other.Y + other.Height - 1);
+
+                    // Добавляем белые пиксели из другого прямоугольника
+                    for (int y = Math.Max(0, other.Y); y < Math.Min(_image.Height, other.Y + other.Height); y++)
+                    {
+                        for (int x = Math.Max(0, other.X); x < Math.Min(_image.Width, other.X + other.Width); x++)
                         {
-                            int transitions = CountTransitions(binary, contour);
-                            if (transitions > 10) // Более строгий порог
-                                contours.Add(contour);
+                            if (binary[x, y] == 255)
+                            {
+                                whitePixelCount++;
+                            }
                         }
                     }
+
+                    used[j] = true;
                 }
             }
 
-            contours.Sort((a, b) =>
-                (CountTransitions(binary, b) * b.Width * b.Height).CompareTo(
-                 CountTransitions(binary, a) * a.Width * a.Height));
+            int w = maxX - minX + 1;
+            int h = maxY - minY + 1;
+            double newFillRatio = whitePixelCount / (double)(w * h);
 
-            return contours;
-        }
-
-        // Подсчет переходов черное-белое
-        private int CountTransitions(int[,] binary, Rectangle rect)
-        {
-            if (rect.Top < 0 || rect.Top >= _bitmap.Height || rect.Left < 0 || rect.Right > _bitmap.Width)
-                return 0;
-
-            int totalTransitions = 0;
-            int linesToCheck = 3; // Проверяем 3 линии
-            int step = rect.Height / (linesToCheck + 1);
-
-            for (int i = 1; i <= linesToCheck; i++)
+            // Проверка объединенного прямоугольника
+            if (w / (float)h > 1.5 && newFillRatio > 0.3)
             {
-                int y = rect.Top + step * i;
-                if (y >= _bitmap.Height) y = _bitmap.Height - 1;
-                int prev = binary[Math.Min(rect.Left, _bitmap.Width - 1), y];
-                int transitions = 0;
-
-                for (int x = rect.Left + 1; x < rect.Right; x++)
-                {
-                    if (x >= _bitmap.Width) break;
-                    int current = binary[x, y];
-                    if (current != prev)
-                    {
-                        transitions++;
-                        prev = current;
-                    }
-                }
-                totalTransitions += transitions;
+                merged.Add(new Rectangle(minX, minY, w, h));
             }
-
-            return totalTransitions / linesToCheck;
         }
 
-        // Основной метод для комбинированного подхода
-        public Rectangle DetectBarcodeRegionCombined()
+        return merged;
+    }
+
+    // Вспомогательный метод для сохранения контрольного изображения
+    private void SaveContoursImage(int[,] binary, List<Rectangle> rectangles, string filename)
+    {
+        int width = _image.Width;
+        int height = _image.Height;
+        Bitmap bitmap = new Bitmap(width, height, PixelFormat.Format24bppRgb);
+        int padding = 5; // Отступ в пикселях
+
+        // Копируем бинарное изображение
+        for (int y = 0; y < height; y++)
         {
-            // Шаг 1: Бинаризация с выделением светлых областей
-            int[,] binary = GetInvertedBinaryImage();
-            SaveBinary("1_binary_combined.png", binary);
-
-            // Шаг 2: Морфологическое открытие для удаления штрихов
-            int[,] opened = ApplyMorphologicalOpening(binary, kernelSize: 15);
-            SaveBinary("2_opened_combined.png", opened);
-
-            // Шаг 3: Поиск наибольшей белой области
-            Rectangle largestWhiteRegion = FindLargestWhiteRegion(opened);
-            SaveContoursImage("3_contours_combined.png", new List<Rectangle> { largestWhiteRegion });
-
-            if (largestWhiteRegion == Rectangle.Empty)
-                return Rectangle.Empty;
-
-            // Шаг 4: Проверка наличия штрихов внутри области
-            if (HasStrikesInside(binary, largestWhiteRegion))
-            {
-                double density = CalculateTransitionDensity(binary, largestWhiteRegion);
-                if (density > 0.1) // Порог плотности переходов (настраиваемый)
-                {
-                    Rectangle roi = InflateRectangle(largestWhiteRegion, 10, _bitmap.Width, _bitmap.Height);
-                    SaveContoursImage("4_roi_combined.png", new List<Rectangle> { roi });
-                    return roi;
-                }
-            }
-
-            return Rectangle.Empty;
-        }
-
-        // Метод для получения инвертированного бинарного изображения
-        private int[,] GetInvertedBinaryImage()
-        {
-            int width = _bitmap.Width;
-            int height = _bitmap.Height;
-            int[,] grayscale = ToGrayscale();
-            int[,] filtered = ApplyMedianFilter(grayscale, 5);
-            int[,] binary = new int[width, height];
-
-            double threshold = CalculateAdaptiveThreshold(filtered);
-
             for (int x = 0; x < width; x++)
             {
-                for (int y = 0; y < height; y++)
-                {
-                    binary[x, y] = filtered[x, y] > threshold ? 1 : 0; // Фон = 1, штрихи = 0
-                }
+                int value = binary[x, y];
+                Color color = value == 255 ? Color.White : Color.Black;
+                bitmap.SetPixel(x, y, color);
             }
-
-            return binary;
         }
 
-        // Поиск наибольшей белой области
-        private Rectangle FindLargestWhiteRegion(int[,] binary)
+        // Отрисовка прямоугольников
+        using (Graphics g = Graphics.FromImage(bitmap))
         {
-            int width = binary.GetLength(0);
-            int height = binary.GetLength(1);
-            bool[,] visited = new bool[width, height];
-            Rectangle largestRect = Rectangle.Empty;
-            int maxArea = 0;
+            foreach (var rect in rectangles)
+            {
+                // Расширяем прямоугольник с учетом отступа
+                int newX = Math.Max(0, rect.X - padding);
+                int newY = Math.Max(0, rect.Y - padding);
+                int newWidth = Math.Min(width - newX, rect.Width + 2 * padding);
+                int newHeight = Math.Min(height - newY, rect.Height + 2 * padding);
 
+                // Отрисовываем расширенный прямоугольник
+                g.DrawRectangle(Pens.Red, newX, newY, newWidth - 1, newHeight - 1);
+            }
+        }
+
+        try
+        {
+            bitmap.Save(filename, ImageFormat.Png);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error saving {filename}: {ex.Message}");
+        }
+
+        bitmap.Save(filename, ImageFormat.Png);
+    }
+
+    // Helper method to save int[,] as Bitmap
+    private void SaveArrayAsImage(int[,] data, string filename)
+    {
+        int width = data.GetLength(0);
+        int height = data.GetLength(1);
+        Bitmap bmp = new Bitmap(width, height, PixelFormat.Format24bppRgb);
+
+        for (int y = 0; y < height; y++)
+        {
             for (int x = 0; x < width; x++)
             {
-                for (int y = 0; y < height; y++)
+                int value = data[x, y];
+                if (value < 0) value = 0;
+                if (value > 255) value = 255;
+                Color color = Color.FromArgb(value, value, value);
+                bmp.SetPixel(x, y, color);
+            }
+        }
+
+        try
+        {
+            bmp.Save(filename, ImageFormat.Png);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error saving {filename}: {ex.Message}");
+        }
+    }
+
+    // Helper method to save a cropped region as Bitmap
+    private void SaveRegionAsImage(int[,] data, Rectangle region, string filename)
+    {
+        int width = region.Width;
+        int height = region.Height;
+        Bitmap bmp = new Bitmap(width, height, PixelFormat.Format24bppRgb);
+
+        for (int y = 0; y < height; y++)
+        {
+            for (int x = 0; x < width; x++)
+            {
+                int value = data[region.X + x, region.Y + y];
+                if (value < 0) value = 0;
+                if (value > 255) value = 255;
+                Color color = Color.FromArgb(value, value, value);
+                bmp.SetPixel(x, y, color);
+            }
+        }
+
+        try
+        {
+            bmp.Save(filename, ImageFormat.Png);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error saving {filename}: {ex.Message}");
+        }
+    }
+
+    // Apply CLAHE (simplified version)
+    private int[,] ApplyCLAHE(int[,] input, Rectangle region)
+    {
+        int width = region.Width;
+        int height = region.Height;
+        int[,] result = new int[_image.Width, _image.Height];
+        int tileSize = 8;
+        int clipLimit = 2;
+
+        // Compute histogram for each tile
+        for (int ty = 0; ty < height; ty += tileSize)
+        {
+            for (int tx = 0; tx < width; tx += tileSize)
+            {
+                int[] histogram = new int[256];
+                int pixelCount = 0;
+
+                // Build histogram
+                for (int y = ty; y < Math.Min(ty + tileSize, height); y++)
                 {
-                    if (binary[x, y] == 1 && !visited[x, y])
+                    for (int x = tx; x < Math.Min(tx + tileSize, width); x++)
                     {
-                        int minX = x, maxX = x, minY = y, maxY = y;
-                        FloodFill(binary, visited, x, y, ref minX, ref maxX, ref minY, ref maxY);
+                        int value = input[region.X + x, region.Y + y];
+                        histogram[value]++;
+                        pixelCount++;
+                    }
+                }
 
-                        int rectWidth = maxX - minX + 1;
-                        int rectHeight = maxY - minY + 1;
-                        int area = rectWidth * rectHeight;
-                        float aspectRatio = (float)rectWidth / rectHeight;
+                // Clip histogram
+                int clipThreshold = pixelCount / 256 * clipLimit;
+                int clippedPixels = 0;
+                for (int i = 0; i < 256; i++)
+                {
+                    if (histogram[i] > clipThreshold)
+                    {
+                        clippedPixels += histogram[i] - clipThreshold;
+                        histogram[i] = clipThreshold;
+                    }
+                }
+                int perBin = clippedPixels / 256;
+                for (int i = 0; i < 256; i++)
+                {
+                    histogram[i] += perBin;
+                }
 
-                        // Проверяем площадь и соотношение сторон
-                        if (area > maxArea &&
-                            area < width * height * 0.75 && // Ограничение размера
-                            aspectRatio > 1.5f && aspectRatio < 10.0f) // Штрих-код обычно шире, чем выше
-                        {
-                            maxArea = area;
-                            largestRect = new Rectangle(minX, minY, rectWidth, rectHeight);
-                        }
+                // Compute CDF
+                int[] cdf = new int[256];
+                cdf[0] = histogram[0];
+                for (int i = 1; i < 256; i++)
+                {
+                    cdf[i] = cdf[i - 1] + histogram[i];
+                }
+                int cdfMin = cdf.First(v => v > 0);
+                int cdfMax = cdf[255];
+
+                // Apply transformation
+                for (int y = ty; y < Math.Min(ty + tileSize, height); y++)
+                {
+                    for (int x = tx; x < Math.Min(tx + tileSize, width); x++)
+                    {
+                        int value = input[region.X + x, region.Y + y];
+                        int newValue = cdfMax == cdfMin ? value : ((cdf[value] - cdfMin) * 255) / (cdfMax - cdfMin);
+                        result[region.X + x, region.Y + y] = newValue;
                     }
                 }
             }
-
-            return largestRect;
         }
 
-        // Заливка для поиска связанных областей
-        private void FloodFill(int[,] binary, bool[,] visited, int x, int y,
-                               ref int minX, ref int maxX, ref int minY, ref int maxY)
+        return result;
+    }
+
+    // Otsu thresholding
+    private int[,] OtsuThreshold(int[,] input, Rectangle region)
+    {
+        int width = region.Width;
+        int height = region.Height;
+        int[,] result = new int[_image.Width, _image.Height];
+
+        // Compute histogram
+        int[] histogram = new int[256];
+        int totalPixels = width * height;
+        for (int y = 0; y < height; y++)
         {
-            int width = binary.GetLength(0);
-            int height = binary.GetLength(1);
-            Queue<(int x, int y)> queue = new Queue<(int x, int y)>();
-            queue.Enqueue((x, y));
-            visited[x, y] = true;
-
-            while (queue.Count > 0)
+            for (int x = 0; x < width; x++)
             {
-                var (cx, cy) = queue.Dequeue();
-                minX = Math.Min(minX, cx);
-                maxX = Math.Max(maxX, cx);
-                minY = Math.Min(minY, cy);
-                maxY = Math.Max(maxY, cy);
+                histogram[input[region.X + x, region.Y + y]]++;
+            }
+        }
 
-                for (int dx = -1; dx <= 1; dx++)
+        // Otsu's method
+        float sum = 0;
+        for (int i = 0; i < 256; i++)
+        {
+            sum += i * histogram[i];
+        }
+        float sumB = 0;
+        int wB = 0;
+        int wF = 0;
+        float maxVariance = 0;
+        int threshold = 0;
+
+        for (int t = 0; t < 256; t++)
+        {
+            wB += histogram[t];
+            if (wB == 0) continue;
+            wF = totalPixels - wB;
+            if (wF == 0) break;
+            sumB += t * histogram[t];
+            float mB = sumB / wB;
+            float mF = (sum - sumB) / wF;
+            float variance = wB * wF * (mB - mF) * (mB - mF);
+            if (variance > maxVariance)
+            {
+                maxVariance = variance;
+                threshold = t;
+            }
+        }
+
+        // Apply threshold
+        for (int y = 0; y < height; y++)
+        {
+            for (int x = 0; x < width; x++)
+            {
+                int value = input[region.X + x, region.Y + y];
+                result[region.X + x, region.Y + y] = value >= threshold ? 255 : 0;
+            }
+        }
+
+        return result;
+    }
+
+    public Rectangle DetectBarcodeRegion()
+    {
+        // Step 1: Noise reduction
+        int[,] blurred = GaussianBlur(_grayImage);
+
+        // Step 2: Gradient analysis
+        int[,] gradX = SobelHorizontal(blurred);
+
+        // Step 3: Morphological closing
+        int[,] closed = MorphologicalClosing(gradX);
+
+        // Step 4: Adaptive thresholding
+        int[,] thresh = AdaptiveThreshold(closed);
+
+        // Step 5: Contour detection
+        var contours = FindContours(thresh);
+
+        // Select the largest valid rectangle
+        if (contours.Length == 0)
+        {
+            _barcodeRegion = Rectangle.Empty;
+        }
+        else
+        {
+            _barcodeRegion = contours.OrderByDescending(r => r.Width * r.Height).First();
+        }
+
+        return _barcodeRegion;
+    }
+
+    public Bitmap HighlightBarcode()
+    {
+        Bitmap result = new Bitmap(_image);
+        if (_barcodeRegion != Rectangle.Empty)
+        {
+            using (Graphics g = Graphics.FromImage(result))
+            {
+                using (Pen pen = new Pen(Color.Red, 3))
                 {
-                    for (int dy = -1; dy <= 1; dy++)
-                    {
-                        int nx = cx + dx;
-                        int ny = cy + dy;
-                        if (nx >= 0 && nx < width && ny >= 0 && ny < height &&
-                            binary[nx, ny] == 1 && !visited[nx, ny])
-                        {
-                            visited[nx, ny] = true;
-                            queue.Enqueue((nx, ny));
-                        }
-                    }
+                    g.DrawRectangle(pen, _barcodeRegion);
                 }
             }
         }
 
-        // Проверка наличия штрихов внутри области
-        private bool HasStrikesInside(int[,] originalBinary, Rectangle region)
+        try
         {
-            if (region.Top < 0 || region.Top >= _bitmap.Height || region.Left < 0 || region.Right > _bitmap.Width)
-                return false;
-
-            int strikeCount = 0;
-            int scanLineY = region.Top + region.Height / 2;
-            if (scanLineY >= _bitmap.Height) scanLineY = _bitmap.Height - 1;
-
-            for (int x = region.Left; x < region.Right && x < _bitmap.Width; x++)
-            {
-                if (originalBinary[x, scanLineY] == 0)
-                {
-                    strikeCount++;
-                    x += 3; // Пропуск для избежания подсчёта одного штриха несколько раз
-                }
-            }
-
-            return strikeCount >= 5;
+            result.Save("6_highlighted.png", ImageFormat.Png);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error saving 6_highlighted.png: {ex.Message}");
         }
 
-        // Расширение прямоугольника с учётом границ
-        private Rectangle InflateRectangle(Rectangle rect, int padding, int maxWidth, int maxHeight)
+        return result;
+    }
+
+    public int[] GetProfileFromRegion(Rectangle region)
+    {
+        if (region == Rectangle.Empty)
         {
-            return new Rectangle(
-                Math.Max(0, rect.Left - padding),
-                Math.Max(0, rect.Top - padding),
-                Math.Min(maxWidth - rect.Left, rect.Width + 2 * padding),
-                Math.Min(maxHeight - rect.Top, rect.Height + 2 * padding)
-            );
+            return new int[0];
         }
 
-        // Основной метод (на базе Собеля)
-        public Rectangle DetectBarcodeRegion()
+        // Ensure region is within image bounds
+        region = Rectangle.Intersect(region, new Rectangle(0, 0, _image.Width, _image.Height));
+        if (region.IsEmpty)
         {
-            int width = _bitmap.Width;
-            int height = _bitmap.Height;
-
-            // Шаг 1: Преобразование в градации серого
-            int[,] grayscale = ToGrayscale();
-            SaveGrayscale("1_grayscale_sobel.png");
-
-            // Шаг 2: Применение медианного фильтра
-            grayscale = ApplyMedianFilter(grayscale, 5);
-
-            // Шаг 3: Вычисление градиентов с помощью фильтра Собеля
-            var (magnitude, direction) = ApplySobelFilter(grayscale);
-            SaveGradientImage("2_gradient_sobel.png", magnitude);
-
-            // Шаг 4: Сглаживание градиентов
-            magnitude = ApplyBlur(magnitude, 5);
-
-            // Шаг 5: Бинаризация с адаптивным порогом
-            double threshold = CalculateAdaptiveThreshold(magnitude);
-            int[,] binary = ApplyThreshold(magnitude, threshold);
-            SaveBinary("3_binary_before_closing_sobel.png", binary);
-
-            // Шаг 6: Морфологическое закрытие
-            binary = ApplyMorphologicalClosing(binary, 5);
-            SaveBinary("4_binary_after_closing_sobel.png", binary);
-
-            // Шаг 7: Поиск контуров
-            List<Rectangle> contours = FindContours(binary);
-            SaveContoursImage("5_contours_sobel.png", contours);
-
-            // Шаг 8: Выбор области штрих-кода
-            if (contours.Count == 0)
-                return Rectangle.Empty;
-
-            Rectangle roi = contours[0];
-            roi = InflateRectangle(roi, 5, width, height);
-            SaveContoursImage("6_roi_sobel.png", new List<Rectangle> { roi });
-
-            return roi;
+            return new int[0];
         }
 
-        // Комбинированный метод (основной для вызова)
-        public Rectangle DetectBarcodeRegionHybrid()
+        // Extract ROI
+        int[,] roi = new int[region.Width, region.Height];
+        for (int y = 0; y < region.Height; y++)
         {
-            // Сначала пробуем комбинированный подход (лучше для белого фона)
-            Rectangle region = DetectBarcodeRegionCombined();
-            if (region != Rectangle.Empty)
-                return region;
-
-            // Если не удалось, пробуем подход на базе Собеля
-            return DetectBarcodeRegion();
-        }
-
-        // Получение профиля из региона
-        public int[] GetProfileFromRegion(Rectangle region)
-        {
-            int[] profile = new int[region.Width];
-            int[,] grayscale = ToGrayscale();
-            int[,] filtered = ApplyMedianFilter(grayscale, 5);
-            double threshold = CalculateAdaptiveThreshold(filtered);
-
             for (int x = 0; x < region.Width; x++)
             {
-                int sum = 0;
-                int count = 0;
-                for (int y = region.Top; y < region.Bottom; y++)
-                {
-                    int adjustedX = region.Left + x;
-                    if (adjustedX >= 0 && adjustedX < _bitmap.Width && y >= 0 && y < _bitmap.Height)
-                    {
-                        sum += filtered[adjustedX, y];
-                        count++;
-                    }
-                }
-                int avg = count > 0 ? sum / count : 0;
-                profile[x] = avg < threshold ? 1 : 0; // Штрихи = 1, фон = 0
+                roi[x, y] = _grayImage[region.X + x, region.Y + y];
             }
-            return profile;
         }
+        SaveArrayAsImage(roi, "7_roi.png");
 
-        // Диагностика: сохранение градаций серого
-        public void SaveGrayscale(string path)
+        // Apply CLAHE
+        int[,] clahe = ApplyCLAHE(_grayImage, region);
+        SaveRegionAsImage(clahe, region, "8_clahe.png");
+
+        // Binarize with Otsu
+        int[,] binary = OtsuThreshold(clahe, region);
+        SaveRegionAsImage(binary, region, "9_binary.png");
+
+        // Compute profile by summing along vertical axis
+        int[] profile = new int[region.Width];
+        for (int x = 0; x < region.Width; x++)
         {
-            int[,] grayscale = ToGrayscale();
-            Bitmap bmp = new Bitmap(_bitmap.Width, _bitmap.Height);
-            for (int x = 0; x < bmp.Width; x++)
-                for (int y = 0; y < bmp.Height; y++)
-                {
-                    int g = grayscale[x, y];
-                    bmp.SetPixel(x, y, Color.FromArgb(g, g, g));
-                }
-            bmp.Save(path);
-        }
-
-        // Диагностика: сохранение бинарного изображения
-        private void SaveBinary(string path, int[,] binary)
-        {
-            Bitmap bmp = new Bitmap(_bitmap.Width, _bitmap.Height);
-            for (int x = 0; x < bmp.Width; x++)
-                for (int y = 0; y < bmp.Height; y++)
-                {
-                    int val = binary[x, y] * 255;
-                    bmp.SetPixel(x, y, Color.FromArgb(val, val, val));
-                }
-            bmp.Save(path);
-        }
-
-        // Диагностика: сохранение изображения градиентов
-        private void SaveGradientImage(string path, double[,] gradients)
-        {
-            int width = _bitmap.Width;
-            int height = _bitmap.Height;
-            Bitmap bmp = new Bitmap(width, height);
-            double maxGradient = gradients.Cast<double>().Max();
-            if (maxGradient == 0) maxGradient = 1;
-
-            for (int x = 0; x < width; x++)
+            int sum = 0;
+            for (int y = 0; y < region.Height; y++)
             {
-                for (int y = 0; y < height; y++)
-                {
-                    int val = (int)(gradients[x, y] / maxGradient * 255);
-                    bmp.SetPixel(x, y, Color.FromArgb(val, val, val));
-                }
+                sum += binary[region.X + x, region.Y + y];
             }
-            bmp.Save(path);
+            profile[x] = sum;
         }
 
-        // Диагностика: сохранение контуров
-        public void SaveContoursImage(string path, List<Rectangle> contours)
-        {
-            Bitmap result = new Bitmap(_bitmap);
-            using (Graphics g = Graphics.FromImage(result))
-            using (Pen pen = new Pen(Color.Lime, 2))
-            {
-                foreach (var rect in contours)
-                    if (!rect.IsEmpty)
-                        g.DrawRectangle(pen, rect);
-            }
-            result.Save(path);
-        }
-
-        // Выделение области штрих-кода
-        public Bitmap HighlightBarcode()
-        {
-            Rectangle region = DetectBarcodeRegionHybrid();
-            Bitmap highlighted = new Bitmap(_bitmap);
-            if (region.IsEmpty) return highlighted;
-
-            using (Graphics g = Graphics.FromImage(highlighted))
-            {
-                using (Pen pen = new Pen(Color.Red, 2))
-                {
-                    g.DrawRectangle(pen, region);
-                }
-            }
-            highlighted.Save("7_highlighted_barcode.png");
-            return highlighted;
-        }
-
-        // Отрисовка контуров
-        public Bitmap DrawContours(List<Rectangle> contours)
-        {
-            Bitmap result = new Bitmap(_bitmap);
-            using (Graphics g = Graphics.FromImage(result))
-            using (Pen pen = new Pen(Color.Lime, 2))
-            {
-                foreach (var rect in contours)
-                    if (!rect.IsEmpty)
-                        g.DrawRectangle(pen, rect);
-            }
-            return result;
-        }
-
-        private double CalculateTransitionDensity(int[,] binary, Rectangle region)
-        {
-            if (region.Top < 0 || region.Top >= _bitmap.Height || region.Left < 0 || region.Right > _bitmap.Width)
-                return 0.0;
-
-            int scanLines = 3;
-            int step = region.Height / (scanLines + 1);
-            double totalDensity = 0.0;
-
-            for (int i = 1; i <= scanLines; i++)
-            {
-                int y = region.Top + step * i;
-                if (y >= _bitmap.Height) y = _bitmap.Height - 1;
-
-                int transitions = 0;
-                int prevValue = binary[Math.Min(region.Left, _bitmap.Width - 1), y];
-                for (int x = region.Left + 1; x < region.Right && x < _bitmap.Width; x++)
-                {
-                    int currentValue = binary[x, y];
-                    if (currentValue != prevValue)
-                    {
-                        transitions++;
-                        prevValue = currentValue;
-                    }
-                }
-                double density = (double)transitions / region.Width;
-                totalDensity += density;
-            }
-
-            return totalDensity / scanLines;
-        }
+        return profile;
     }
 }

@@ -111,38 +111,31 @@ namespace BarcodeDecoderWinForms
                 return;
             }
 
-            // Выделяем штрих-код
             _barcodeRegion = _barcodeImage.DetectBarcodeRegion();
-
             Bitmap highlightedImage;
 
             if (_barcodeRegion == Rectangle.Empty)
             {
                 txtResult.Text = "Штрих-код не найден.";
-                highlightedImage = new Bitmap(_originalImage); // Используем оригинальное изображение
+                highlightedImage = new Bitmap(_originalImage);
             }
             else
             {
                 txtResult.Text = "Штрих-код выделен.";
-                highlightedImage = _barcodeImage.HighlightBarcode(); // Подсвечиваем найденный штрих-код
+                highlightedImage = _barcodeImage.HighlightBarcode();
             }
 
             pictureBox.Image = highlightedImage;
 
-            // Сохраняем все этапы обработки
             try
             {
-               
-                highlightedImage.Save("5_highlighted.png");
-
-                txtResult.AppendText("\r\nИзображения сохранены рядом с .exe файлом.");
+                txtResult.AppendText("\r\nИзображения сохранены: 1_grayscale.png, 1a_clahe.png, 2_blurred.png, 3_gradient.png, 4_morphological.png, 5_threshold.png, 5a_contours.png, 6_highlighted.png");
             }
             catch (Exception ex)
             {
                 txtResult.AppendText($"\r\nОшибка при сохранении: {ex.Message}");
             }
         }
-
 
         // Обработчик для кнопки "Расшифровать"
         private void btnDecodeBarcode_Click(object sender, EventArgs e)
