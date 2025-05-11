@@ -541,119 +541,119 @@ public class BarcodeImage
 
     // Apply CLAHE (simplified version)
     private int[,] ApplyCLAHE(int[,] input, Rectangle region)
+{
+    // Проверка корректности региона
+    if (region.IsEmpty || region.Width <= 0 || region.Height <= 0)
     {
-        // Проверка корректности региона
-        if (region.IsEmpty || region.Width <= 0 || region.Height <= 0)
-        {
-            return input; // Возвращаем исходное изображение, если регион некорректен
-        }
-
-        // Ограничение региона границами изображения
-        region = Rectangle.Intersect(region, new Rectangle(0, 0, _image.Width, _image.Height));
-        if (region.IsEmpty)
-        {
-            return input;
-        }
-
-        int width = region.Width;
-        int height = region.Height;
-        int[,] result = new int[_image.Width, _image.Height];
-        int tileSize = 8;
-        int clipLimit = 2;
-
-        // Копируем входное изображение в результат для необрабатываемых областей
-        for (int y = 0; y < _image.Height; y++)
-        {
-            for (int x = 0; x < _image.Width; x++)
-            {
-                result[x, y] = input[x, y];
-            }
-        }
-
-        // Compute histogram for each tile
-        for (int ty = 0; ty < height; ty += tileSize)
-        {
-            for (int tx = 0; tx < width; tx += tileSize)
-            {
-                int[] histogram = new int[256];
-                int pixelCount = 0;
-
-                // Build histogram
-                for (int y = ty; y < Math.Min(ty + tileSize, height); y++)
-                {
-                    for (int x = tx; x < Math.Min(tx + tileSize, width); x++)
-                    {
-                        int value = input[region.X + x, region.Y + y];
-                        if (value >= 0 && value < 256) // Проверка корректности значения
-                        {
-                            histogram[value]++;
-                            pixelCount++;
-                        }
-                    }
-                }
-
-                // Если тайл пустой или содержит мало пикселей, пропускаем обработку
-                if (pixelCount == 0)
-                {
-                    continue;
-                }
-
-                // Clip histogram
-                int clipThreshold = pixelCount / 256 * clipLimit;
-                int clippedPixels = 0;
-                for (int i = 0; i < 256; i++)
-                {
-                    if (histogram[i] > clipThreshold)
-                    {
-                        clippedPixels += histogram[i] - clipThreshold;
-                        histogram[i] = clipThreshold;
-                    }
-                }
-                int perBin = clippedPixels / 256;
-                for (int i = 0; i < 256; i++)
-                {
-                    histogram[i] += perBin;
-                }
-
-                // Compute CDF
-                int[] cdf = new int[256];
-                cdf[0] = histogram[0];
-                for (int i = 1; i < 256; i++)
-                {
-                    cdf[i] = cdf[i - 1] + histogram[i];
-                }
-
-                // Находим минимальное ненулевое значение CDF
-                int cdfMin = 0;
-                for (int i = 0; i < 256; i++)
-                {
-                    if (cdf[i] > 0)
-                    {
-                        cdfMin = cdf[i];
-                        break;
-                    }
-                }
-                int cdfMax = cdf[255];
-
-                // Apply transformation
-                for (int y = ty; y < Math.Min(ty + tileSize, height); y++)
-                {
-                    for (int x = tx; x < Math.Min(tx + tileSize, width); x++)
-                    {
-                        int value = input[region.X + x, region.Y + y];
-                        if (value >= 0 && value < 256)
-                        {
-                            int newValue = cdfMax == cdfMin ? value : ((cdf[value] - cdfMin) * 255) / (cdfMax - cdfMin);
-                            result[region.X + x, region.Y + y] = Math.Max(0, Math.Min(255, newValue));
-                        }
-                    }
-                }
-            }
-        }
-
-        SaveArrayAsImage(result, "2_clahe.png"); // Для отладки
-        return result;
+        return input; // Возвращаем исходное изображение, если регион некорректен
     }
+
+    // Ограничение региона границами изображения
+    region = Rectangle.Intersect(region, new Rectangle(0, 0, _image.Width, _image.Height));
+    if (region.IsEmpty)
+    {
+        return input;
+    }
+
+    int width = region.Width;
+    int height = region.Height;
+    int[,] result = new int[_image.Width, _image.Height];
+    int tileSize = 8;
+    int clipLimit = 2;
+
+    // Копируем входное изображение в результат для необрабатываемых областей
+    for (int y = 0; y < _image.Height; y++)
+    {
+        for (int x = 0; x < _image.Width; x++)
+        {
+            result[x, y] = input[x, y];
+        }
+    }
+
+    // Compute histogram for each tile
+    for (int ty = 0; ty < height; ty += tileSize)
+    {
+        for (int tx = 0; tx < width; tx += tileSize)
+        {
+            int[] histogram = new int[256];
+            int pixelCount = 0;
+
+            // Build histogram
+            for (int y = ty; y < Math.Min(ty + tileSize, height); y++)
+            {
+                for (int x = tx; x < Math.Min(tx + tileSize, width); x++)
+                {
+                    int value = input[region.X + x, region.Y + y];
+                    if (value >= 0 && value < 256) // Проверка корректности значения
+                    {
+                        histogram[value]++;
+                        pixelCount++;
+                    }
+                }
+            }
+
+            // Если тайл пустой или содержит мало пикселей, пропускаем обработку
+            if (pixelCount == 0)
+            {
+                continue;
+            }
+
+            // Clip histogram
+            int clipThreshold = pixelCount / 256 * clipLimit;
+            int clippedPixels = 0;
+            for (int i = 0; i < 256; i++)
+            {
+                if (histogram[i] > clipThreshold)
+                {
+                    clippedPixels += histogram[i] - clipThreshold;
+                    histogram[i] = clipThreshold;
+                }
+            }
+            int perBin = clippedPixels / 256;
+            for (int i = 0; i < 256; i++)
+            {
+                histogram[i] += perBin;
+            }
+
+            // Compute CDF
+            int[] cdf = new int[256];
+            cdf[0] = histogram[0];
+            for (int i = 1; i < 256; i++)
+            {
+                cdf[i] = cdf[i - 1] + histogram[i];
+            }
+
+            // Находим минимальное ненулевое значение CDF
+            int cdfMin = 0;
+            for (int i = 0; i < 256; i++)
+            {
+                if (cdf[i] > 0)
+                {
+                    cdfMin = cdf[i];
+                    break;
+                }
+            }
+            int cdfMax = cdf[255];
+
+            // Apply transformation
+            for (int y = ty; y < Math.Min(ty + tileSize, height); y++)
+            {
+                for (int x = tx; x < Math.Min(tx + tileSize, width); x++)
+                {
+                    int value = input[region.X + x, region.Y + y];
+                    if (value >= 0 && value < 256)
+                    {
+                        int newValue = cdfMax == cdfMin ? value : ((cdf[value] - cdfMin) * 255) / (cdfMax - cdfMin);
+                        result[region.X + x, region.Y + y] = Math.Max(0, Math.Min(255, newValue));
+                    }
+                }
+            }
+        }
+    }
+
+    SaveArrayAsImage(result, "2_clahe.png"); // Для отладки
+    return result;
+}
 
     // Otsu thresholding
     private int[,] OtsuThreshold(int[,] input, Rectangle region)
