@@ -99,6 +99,26 @@ public class BarcodeImage
         SaveArrayAsImage(gradX, "3_gradient.png");
         return gradX;
     }
+    private int[,] Sobel(int[,] input)
+    {
+        int width = _image.Width;
+        int height = _image.Height;
+        int[,] grad = new int[width, height];
+
+        for (int y = 1; y < height - 1; y++)
+        {
+            for (int x = 1; x < width - 1; x++)
+            {
+                int gx = -input[x - 1, y - 1] - 2 * input[x - 1, y] - input[x - 1, y + 1] +
+                         input[x + 1, y - 1] + 2 * input[x + 1, y] + input[x + 1, y + 1];
+                int gy = -input[x - 1, y - 1] - 2 * input[x, y - 1] - input[x + 1, y - 1] +
+                         input[x - 1, y + 1] + 2 * input[x, y + 1] + input[x + 1, y + 1];
+                grad[x, y] = Math.Min(255, (int)Math.Sqrt(gx * gx + gy * gy));
+            }
+        }
+        SaveArrayAsImage(grad, "3_gradient.png");
+        return grad;
+    }
 
     // Morphological closing 
     private int[,] MorphologicalClosing(int[,] input)
@@ -437,7 +457,6 @@ public class BarcodeImage
         int width = _image.Width;
         int height = _image.Height;
         Bitmap bitmap = new Bitmap(width, height, PixelFormat.Format24bppRgb);
-        int padding = 5; // Отступ в пикселях
 
         // Копируем бинарное изображение
         for (int y = 0; y < height; y++)
@@ -455,24 +474,8 @@ public class BarcodeImage
         {
             foreach (var rect in rectangles)
             {
-                // Расширяем прямоугольник с учетом отступа
-                int newX = Math.Max(0, rect.X - padding);
-                int newY = Math.Max(0, rect.Y - padding);
-                int newWidth = Math.Min(width - newX, rect.Width + 2 * padding);
-                int newHeight = Math.Min(height - newY, rect.Height + 2 * padding);
-
-                // Отрисовываем расширенный прямоугольник
-                g.DrawRectangle(Pens.Red, newX, newY, newWidth - 1, newHeight - 1);
+                g.DrawRectangle(Pens.Red, rect.X, rect.Y, rect.Width - 1, rect.Height - 1);
             }
-        }
-
-        try
-        {
-            bitmap.Save(filename, ImageFormat.Png);
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Error saving {filename}: {ex.Message}");
         }
 
         bitmap.Save(filename, ImageFormat.Png);
@@ -539,11 +542,33 @@ public class BarcodeImage
     // Apply CLAHE (simplified version)
     private int[,] ApplyCLAHE(int[,] input, Rectangle region)
     {
+        // Проверка корректности региона
+        if (region.IsEmpty || region.Width <= 0 || region.Height <= 0)
+        {
+            return input; // Возвращаем исходное изображение, если регион некорректен
+        }
+
+        // Ограничение региона границами изображения
+        region = Rectangle.Intersect(region, new Rectangle(0, 0, _image.Width, _image.Height));
+        if (region.IsEmpty)
+        {
+            return input;
+        }
+
         int width = region.Width;
         int height = region.Height;
         int[,] result = new int[_image.Width, _image.Height];
         int tileSize = 8;
         int clipLimit = 2;
+
+        // Копируем входное изображение в результат для необрабатываемых областей
+        for (int y = 0; y < _image.Height; y++)
+        {
+            for (int x = 0; x < _image.Width; x++)
+            {
+                result[x, y] = input[x, y];
+            }
+        }
 
         // Compute histogram for each tile
         for (int ty = 0; ty < height; ty += tileSize)
@@ -559,9 +584,18 @@ public class BarcodeImage
                     for (int x = tx; x < Math.Min(tx + tileSize, width); x++)
                     {
                         int value = input[region.X + x, region.Y + y];
-                        histogram[value]++;
-                        pixelCount++;
+                        if (value >= 0 && value < 256) // Проверка корректности значения
+                        {
+                            histogram[value]++;
+                            pixelCount++;
+                        }
                     }
+                }
+
+                // Если тайл пустой или содержит мало пикселей, пропускаем обработку
+                if (pixelCount == 0)
+                {
+                    continue;
                 }
 
                 // Clip histogram
@@ -588,7 +622,17 @@ public class BarcodeImage
                 {
                     cdf[i] = cdf[i - 1] + histogram[i];
                 }
-                int cdfMin = cdf.First(v => v > 0);
+
+                // Находим минимальное ненулевое значение CDF
+                int cdfMin = 0;
+                for (int i = 0; i < 256; i++)
+                {
+                    if (cdf[i] > 0)
+                    {
+                        cdfMin = cdf[i];
+                        break;
+                    }
+                }
                 int cdfMax = cdf[255];
 
                 // Apply transformation
@@ -597,13 +641,17 @@ public class BarcodeImage
                     for (int x = tx; x < Math.Min(tx + tileSize, width); x++)
                     {
                         int value = input[region.X + x, region.Y + y];
-                        int newValue = cdfMax == cdfMin ? value : ((cdf[value] - cdfMin) * 255) / (cdfMax - cdfMin);
-                        result[region.X + x, region.Y + y] = newValue;
+                        if (value >= 0 && value < 256)
+                        {
+                            int newValue = cdfMax == cdfMin ? value : ((cdf[value] - cdfMin) * 255) / (cdfMax - cdfMin);
+                            result[region.X + x, region.Y + y] = Math.Max(0, Math.Min(255, newValue));
+                        }
                     }
                 }
             }
         }
 
+        SaveArrayAsImage(result, "2_clahe.png"); // Для отладки
         return result;
     }
 
@@ -669,8 +717,9 @@ public class BarcodeImage
 
     public Rectangle DetectBarcodeRegion()
     {
+        int[,] enhanced = ApplyCLAHE(_grayImage, new Rectangle(0, 0, _image.Width, _image.Height));
         // Step 1: Noise reduction
-        int[,] blurred = GaussianBlur(_grayImage);
+        int[,] blurred = GaussianBlur(enhanced);
 
         // Step 2: Gradient analysis
         int[,] gradX = SobelHorizontal(blurred);
