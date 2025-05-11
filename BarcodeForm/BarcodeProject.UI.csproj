@@ -117,10 +117,6 @@
     </Reference>
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="BarcodeAnalyzer.cs" />
-    <Compile Include="BarcodeImage.cs" />
-    <Compile Include="Code128Decoder.cs" />
-    <Compile Include="EanUpcDecoder.cs" />
     <Compile Include="BarcodeForm.cs">
       <SubType>Form</SubType>
     </Compile>
@@ -129,7 +125,6 @@
     </Compile>
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
-    <Compile Include="Utils.cs" />
     <EmbeddedResource Include="BarcodeForm.resx">
       <DependentUpon>BarcodeForm.cs</DependentUpon>
     </EmbeddedResource>
@@ -155,6 +150,12 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="App.config" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\BarcodeProject.Core\BarcodeProject.Core.csproj">
+      <Project>{6d17527c-f46a-446b-b91c-7071f6c0519d}</Project>
+      <Name>BarcodeProject.Core</Name>
+    </ProjectReference>
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>

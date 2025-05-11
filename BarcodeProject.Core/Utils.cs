@@ -1,7 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 
-namespace BarcodeDecoderWinForms
+namespace BarcodeProject.Core
 {
     public static class Utils
     {

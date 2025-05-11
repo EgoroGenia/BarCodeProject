@@ -1,4 +1,4 @@
-﻿namespace BarcodeDecoderWinForms
+﻿namespace BarcodeProject.Core
 {
     public static class BarcodeAnalyzer
     {

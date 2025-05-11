@@ -2,7 +2,7 @@
 using System.Collections.Generic;
 using System.Linq;
 
-namespace BarcodeDecoderWinForms
+namespace BarcodeProject.Core
 {
     public static class EanUpcDecoder
     {
