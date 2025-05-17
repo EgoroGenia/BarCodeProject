@@ -2,6 +2,8 @@
 using System.Drawing;
 using System.Windows.Forms;
 using BarcodeProject.Core;
+using System.IO;
+using System.Linq;
 
 namespace BarcodeDecoderWinForms
 {
@@ -34,75 +36,6 @@ namespace BarcodeDecoderWinForms
         }
 
 
-        private void ProcessBarcode(string imagePath)
-        {
-            var image = new BarcodeImage(imagePath);
-
-            // Шаг 1: Выделяем штрих-код и отображаем его
-            Bitmap highlightedImage = image.HighlightBarcode();
-            pictureBox.Image = highlightedImage;
-
-            // Шаг 2: Получаем область штрих-кода
-            Rectangle barcodeRegion = image.DetectBarcodeRegion();
-            if (barcodeRegion == Rectangle.Empty)
-            {
-                txtResult.Text = "Штрих-код не найден.";
-                return;
-            }
-
-            // Шаг 3: Получаем профиль только из области штрих-кода
-            var profile = image.GetProfileFromRegion(barcodeRegion);
-
-            // Шаг 4: Декодируем штрих-код
-            string result = string.Empty;
-            if (cmbBarcodeType.SelectedItem == null)
-            {
-                result = "Выберите тип штрих-кода.";
-            }
-            else
-            {
-                switch (cmbBarcodeType.SelectedItem.ToString())
-                {
-                    case "EAN-13":
-                        result = EanUpcDecoder.DecodeEan13(profile);
-                        break;
-                    case "UPC-A":
-                        result = EanUpcDecoder.DecodeUpcA(profile);
-                        break;
-                    case "Code 128":
-                        result = Code128Decoder.Decode(profile);
-                        break;
-                    default:
-                        result = "Выберите тип штрих-кода.";
-                        break;
-                }
-            }
-
-            txtResult.Text = result;
-        }
-
-        // Обработчик для кнопки "Распознать" (выделить штрих-код)
-        //private void btnHighlightBarcode_Click(object sender, EventArgs e)
-        //{
-        //    if (_barcodeImage == null)
-        //    {
-        //        txtResult.Text = "Сначала откройте изображение.";
-        //        return;
-        //    }
-
-        //    // Выделяем штрих-код и отображаем его
-        //    _barcodeRegion = _barcodeImage.DetectBarcodeRegion();
-        //    if (_barcodeRegion == Rectangle.Empty)
-        //    {
-        //        txtResult.Text = "Штрих-код не найден.";
-        //        pictureBox.Image = new Bitmap(_originalImage); // Возвращаем оригинальное изображение
-        //        return;
-        //    }
-
-        //    Bitmap highlightedImage = _barcodeImage.HighlightBarcode();
-        //    pictureBox.Image = highlightedImage;
-        //    txtResult.Text = "Штрих-код выделен.";
-        //}
         private void btnHighlightBarcode_Click(object sender, EventArgs e)
         {
             if (_barcodeImage == null)
@@ -152,21 +85,44 @@ namespace BarcodeDecoderWinForms
                 return;
             }
 
-            // Получаем профиль из региона штрих-кода
-            int[] profile = _barcodeImage.GetProfileFromRegion(_barcodeRegion);
-
-            // Декодируем штрих-код
-            string result = string.Empty;
             if (cmbBarcodeType.SelectedItem == null)
             {
-                result = "Выберите тип штрих-кода.";
-            }
-            else
-            {
-                result = BarcodeAnalyzer.AnalyzeBarcode(profile, cmbBarcodeType.SelectedItem.ToString());
+                txtResult.Text = "Выберите тип штрих-кода.";
+                return;
             }
 
-            txtResult.Text = result;
+            try
+            {
+                // Получаем профиль
+                int[] profile = _barcodeImage.GetProfileFromRegion(_barcodeRegion);
+
+                // Декодируем штрих-код
+                string result = BarcodeAnalyzer.AnalyzeBarcode(profile, cmbBarcodeType.SelectedItem.ToString());
+                txtResult.Text = result;
+
+                // Отладка
+                var binary = Utils.Binarize(profile);
+                var rle = Utils.RLE(binary);
+                var (bitString, isValid) = Utils.ConvertToBitString(rle);
+                try
+                {
+                    File.WriteAllText("binary_profile.txt", bitString);
+                    File.WriteAllText("rle_debug.txt", string.Join(", ", rle.Select(item => $"({item.value}, {item.length})")));
+                    txtResult.AppendText($"\r\nБинарный профиль сохранён в binary_profile.txt");
+                    txtResult.AppendText($"\r\nRLE сохранён в rle_debug.txt");
+                    txtResult.AppendText($"\r\nДлина профиля: {profile.Length}");
+                    txtResult.AppendText($"\r\nДлина битовой строки: {bitString.Length}");
+                    txtResult.AppendText($"\r\nПервые 20 символов битовой строки: {bitString.Substring(0, Math.Min(20, bitString.Length))}");
+                }
+                catch (Exception ex)
+                {
+                    txtResult.AppendText($"\r\nОшибка при сохранении отладочных файлов: {ex.Message}");
+                }
+            }
+            catch (Exception ex)
+            {
+                txtResult.Text = $"Ошибка при декодировании: {ex.Message}";
+            }
         }
 
         private void сБиблиотекамиToolStripMenuItem_Click(object sender, EventArgs e)

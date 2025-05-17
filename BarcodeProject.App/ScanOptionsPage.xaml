@@ -1,0 +1,10 @@
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="BarcodeProject.App.ScanOptionsPage"
+             Title="Scan Options">
+    <VerticalStackLayout Padding="20" Spacing="20">
+        <Button Text="Сделать фото" Clicked="OnTakePhotoClicked" />
+        <Button Text="Выбрать из галереи" Clicked="OnChooseFromGalleryClicked" />
+        <Button Text="Отмена" Clicked="OnCancelClicked" />
+    </VerticalStackLayout>
+</ContentPage>

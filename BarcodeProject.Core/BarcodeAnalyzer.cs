@@ -9,8 +9,7 @@
             {
                 case "EAN-13":
                     return EanUpcDecoder.DecodeEan13(profile);
-                case "UPC-A":
-                    return EanUpcDecoder.DecodeUpcA(profile);
+                
                 case "Code 128":
                     return Code128Decoder.Decode(profile);
                 default:
