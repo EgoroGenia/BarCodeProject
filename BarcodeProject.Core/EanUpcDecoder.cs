@@ -67,7 +67,7 @@ namespace BarcodeProject.Core
             if (bitString.Substring(92, 3) != EndGuard)
                 return "Ошибка: неверный конечный узор.";
 
-            // Декодирование левой части (42 модуля, цифры 2–7)
+            // Декодирование левой части
             string leftBits = bitString.Substring(3, 42);
             List<string> leftDigits = new List<string>();
             string maskDetected = "";
@@ -75,34 +75,13 @@ namespace BarcodeProject.Core
             for (int i = 0; i < 6; i++)
             {
                 string chunk = leftBits.Substring(i * 7, 7);
-                if (APatterns.ContainsKey(chunk))
+                string digit = DecodePattern(chunk, APatterns, BPatterns);
+                if (digit == null)
                 {
-                    leftDigits.Add(APatterns[chunk]);
-                    maskDetected += "A";
+                    return $"Ошибка: неверный левый шаблон на позиции {i + 2}.";
                 }
-                else if (BPatterns.ContainsKey(chunk))
-                {
-                    leftDigits.Add(BPatterns[chunk]);
-                    maskDetected += "B";
-                }
-                else
-                {
-                    string correctedChunk = FindClosestPattern(chunk, APatterns.Keys.Concat(BPatterns.Keys));
-                    if (correctedChunk != null && APatterns.ContainsKey(correctedChunk))
-                    {
-                        leftDigits.Add(APatterns[correctedChunk]);
-                        maskDetected += "A";
-                    }
-                    else if (correctedChunk != null && BPatterns.ContainsKey(correctedChunk))
-                    {
-                        leftDigits.Add(BPatterns[correctedChunk]);
-                        maskDetected += "B";
-                    }
-                    else
-                    {
-                        return $"Ошибка: неверный левый шаблон на позиции {i + 2}.";
-                    }
-                }
+                leftDigits.Add(digit);
+                maskDetected += APatterns.ContainsKey(chunk) ? "A" : "B";
             }
 
             // Определение первой цифры по маске
@@ -110,47 +89,47 @@ namespace BarcodeProject.Core
             if (firstDigit < 0)
                 return "Ошибка: неверная маска кодирования.";
 
-            // Декодирование правой части (42 модуля, цифры 8–13)
+            // Декодирование правой части
             string rightBits = bitString.Substring(50, 42);
             List<string> rightDigits = new List<string>();
 
             for (int i = 0; i < 6; i++)
             {
                 string chunk = rightBits.Substring(i * 7, 7);
-                if (CPatterns.ContainsKey(chunk))
+                string digit = DecodePattern(chunk, CPatterns);
+                if (digit == null)
                 {
-                    rightDigits.Add(CPatterns[chunk]);
+                    return $"Ошибка: неверный правый шаблон на позиции {i + 8}.";
                 }
-                else
-                {
-                    string correctedChunk = FindClosestPattern(chunk, CPatterns.Keys);
-                    if (correctedChunk != null && CPatterns.ContainsKey(correctedChunk))
-                    {
-                        rightDigits.Add(CPatterns[correctedChunk]);
-                    }
-                    else
-                    {
-                        return $"Ошибка: неверный правый шаблон на позиции {i + 8}.";
-                    }
-                }
+                rightDigits.Add(digit);
             }
 
             // Сборка кода
             string fullCode = firstDigit.ToString() + string.Join("", leftDigits) + string.Join("", rightDigits);
 
-            // Проверка контрольной цифры
-            if (!VerifyChecksum(fullCode))
+            // Проверка контрольной суммы с попыткой исправления
+            string correctedCode = VerifyAndCorrectChecksum(fullCode);
+            if (correctedCode == null)
                 return "Ошибка: неверная контрольная сумма.";
 
-            return fullCode;
+            return correctedCode;
         }
 
-        public static string DecodeUpcA(int[] profile)
+        private static string DecodePattern(string chunk, params Dictionary<string, string>[] patterns)
         {
-            string ean13 = DecodeEan13(profile);
-            if (ean13.StartsWith("0") && ean13.Length == 13)
-                return ean13.Substring(1);
-            return ean13;
+            foreach (var patternDict in patterns)
+            {
+                if (patternDict.ContainsKey(chunk))
+                    return patternDict[chunk];
+            }
+
+            string closest = FindClosestPattern(chunk, patterns.SelectMany(p => p.Keys));
+            foreach (var patternDict in patterns)
+            {
+                if (patternDict.ContainsKey(closest))
+                    return patternDict[closest];
+            }
+            return null;
         }
 
         private static string FindClosestPattern(string input, IEnumerable<string> patterns)
@@ -160,7 +139,7 @@ namespace BarcodeProject.Core
 
             foreach (var pattern in patterns)
             {
-                int distance = HammingDistance(input, pattern);
+                int distance = LevenshteinDistance(input, pattern);
                 if (distance < minDistance)
                 {
                     minDistance = distance;
@@ -171,10 +150,51 @@ namespace BarcodeProject.Core
             return minDistance <= 2 ? closest : null;
         }
 
-        private static int HammingDistance(string a, string b)
+        private static int LevenshteinDistance(string a, string b)
         {
             if (a.Length != b.Length) return int.MaxValue;
-            return a.Zip(b, (x, y) => x == y ? 0 : 1).Sum();
+            int[,] d = new int[a.Length + 1, b.Length + 1];
+
+            for (int i = 0; i <= a.Length; i++)
+                d[i, 0] = i;
+            for (int j = 0; j <= b.Length; j++)
+                d[0, j] = j;
+
+            for (int i = 1; i <= a.Length; i++)
+            {
+                for (int j = 1; j <= b.Length; j++)
+                {
+                    int cost = a[i - 1] == b[j - 1] ? 0 : 1;
+                    d[i, j] = Math.Min(
+                        Math.Min(d[i - 1, j] + 1, d[i, j - 1] + 1),
+                        d[i - 1, j - 1] + cost);
+                }
+            }
+
+            return d[a.Length, b.Length];
+        }
+
+        private static string VerifyAndCorrectChecksum(string code)
+        {
+            if (code.Length != 13) return null;
+
+            if (VerifyChecksum(code))
+                return code;
+
+            // Попробовать исправить одну цифру
+            for (int i = 0; i < 12; i++)
+            {
+                char original = code[i];
+                for (char d = '0'; d <= '9'; d++)
+                {
+                    if (d == original) continue;
+                    string testCode = code.Substring(0, i) + d + code.Substring(i + 1);
+                    if (VerifyChecksum(testCode))
+                        return testCode;
+                }
+            }
+
+            return null;
         }
 
         private static bool VerifyChecksum(string code)

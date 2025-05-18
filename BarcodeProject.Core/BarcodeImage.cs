@@ -135,29 +135,54 @@ namespace BarcodeProject.Core
             return output;
         }
 
-        private int[,] GaussianBlur(int[,] input)
+        private int[,] GaussianBlur(int[,] input, double sigma = 1.4)
         {
             int width = _image.Width;
             int height = _image.Height;
             int[,] result = new int[width, height];
-            float[] kernel = { 1, 4, 7, 4, 1, 4, 16, 26, 16, 4, 6, 26, 41, 26, 6, 4, 16, 26, 16, 4, 1, 4, 7, 4, 1 };
-            float kernelSum = 256;
 
-            for (int y = 2; y < height - 2; y++)
+            // Вычисляем размер ядра: kernelSize = 2 * ceil(3 * sigma) + 1
+            int kernelSize = (int)(2 * Math.Ceiling(3 * sigma) + 1);
+            int halfKernel = kernelSize / 2;
+            float[,] kernel = new float[kernelSize, kernelSize];
+            float kernelSum = 0;
+
+            // Создаём Гауссово ядро
+            for (int ky = -halfKernel; ky <= halfKernel; ky++)
             {
-                for (int x = 2; x < width - 2; x++)
+                for (int kx = -halfKernel; kx <= halfKernel; kx++)
+                {
+                    float value = (float)(Math.Exp(-(kx * kx + ky * ky) / (2 * sigma * sigma)) / (2 * Math.PI * sigma * sigma));
+                    kernel[ky + halfKernel, kx + halfKernel] = value;
+                    kernelSum += value;
+                }
+            }
+
+            // Нормализуем ядро
+            for (int ky = 0; ky < kernelSize; ky++)
+            {
+                for (int kx = 0; kx < kernelSize; kx++)
+                {
+                    kernel[ky, kx] /= kernelSum;
+                }
+            }
+
+            // Применяем свёртку
+            for (int y = halfKernel; y < height - halfKernel; y++)
+            {
+                for (int x = halfKernel; x < width - halfKernel; x++)
                 {
                     float sum = 0;
-                    int k = 0;
-                    for (int ky = -2; ky <= 2; ky++)
+                    for (int ky = -halfKernel; ky <= halfKernel; ky++)
                     {
-                        for (int kx = -2; kx <= 2; kx++)
+                        for (int kx = -halfKernel; kx <= halfKernel; kx++)
                         {
-                            sum += input[x + kx, y + ky] * kernel[k];
-                            k++;
+                            sum += input[x + kx, y + ky] * kernel[ky + halfKernel, kx + halfKernel];
                         }
                     }
-                    result[x, y] = (int)(sum / kernelSum);
+                    result[x, y] = (int)Math.Round(sum);
+                    if (result[x, y] < 0) result[x, y] = 0;
+                    if (result[x, y] > 255) result[x, y] = 255;
                 }
             }
 
@@ -165,25 +190,126 @@ namespace BarcodeProject.Core
             return result;
         }
 
-        private int[,] SobelHorizontal(int[,] input)
+        // Новый метод: Кэнни для обнаружения краёв
+        private int[,] CannyEdgeDetection(int[,] input, double sigma = 1.4, int lowThreshold = 50, int highThreshold = 100)
         {
-            int width = _image.Width;
-            int height = _image.Height;
-            int[,] gradX = new int[width, height];
+            int width = input.GetLength(0);
+            int height = input.GetLength(1);
+            int[,] result = new int[width, height];
+
+            // Шаг 1: Гауссово размытие с заданным sigma
+            int[,] blurred = GaussianBlur(input, sigma);
+
+            // Шаг 2: Вычисление градиентов (Собель для горизонтального и вертикального направлений)
+            double[,] gradX = new double[width, height];
+            double[,] gradY = new double[width, height];
+            double[,] magnitude = new double[width, height];
+            double[,] direction = new double[width, height];
 
             for (int y = 1; y < height - 1; y++)
             {
                 for (int x = 1; x < width - 1; x++)
                 {
-                    int gx = -input[x - 1, y - 1] - 2 * input[x - 1, y] - input[x - 1, y + 1] +
-                             input[x + 1, y - 1] + 2 * input[x + 1, y] + input[x + 1, y + 1];
-                    gradX[x, y] = Math.Abs(gx);
-                    if (gradX[x, y] > 255) gradX[x, y] = 255;
+                    // Горизонтальный градиент
+                    gradX[x, y] = -blurred[x - 1, y - 1] - 2 * blurred[x - 1, y] - blurred[x - 1, y + 1] +
+                                   blurred[x + 1, y - 1] + 2 * blurred[x + 1, y] + blurred[x + 1, y + 1];
+                    // Вертикальный градиент
+                    gradY[x, y] = -blurred[x - 1, y - 1] - 2 * blurred[x, y - 1] - blurred[x + 1, y - 1] +
+                                   blurred[x - 1, y + 1] + 2 * blurred[x, y + 1] + blurred[x + 1, y + 1];
+                    // Величина градиента
+                    magnitude[x, y] = Math.Sqrt(gradX[x, y] * gradX[x, y] + gradY[x, y] * gradY[x, y]);
+                    // Направление градиента (в градусах)
+                    direction[x, y] = Math.Atan2(gradY[x, y], gradX[x, y]) * 180 / Math.PI;
+                    if (direction[x, y] < 0) direction[x, y] += 360;
                 }
             }
 
-            SaveArrayAsImage(gradX, "3_gradient.png");
-            return gradX;
+            // Шаг 3: Подавление немаксимумов
+            int[,] suppressed = new int[width, height];
+            for (int y = 1; y < height - 1; y++)
+            {
+                for (int x = 1; x < width - 1; x++)
+                {
+                    double angle = direction[x, y];
+                    double mag = magnitude[x, y];
+                    int mag1 = 0, mag2 = 0;
+
+                    // Квантование направления (0°, 45°, 90°, 135°)
+                    if ((angle >= 0 && angle < 22.5) || (angle >= 157.5 && angle < 202.5) || (angle >= 337.5 && angle <= 360))
+                    {
+                        mag1 = (int)magnitude[x + 1, y];
+                        mag2 = (int)magnitude[x - 1, y];
+                    }
+                    else if ((angle >= 22.5 && angle < 67.5) || (angle >= 202.5 && angle < 247.5))
+                    {
+                        mag1 = (int)magnitude[x + 1, y - 1];
+                        mag2 = (int)magnitude[x - 1, y + 1];
+                    }
+                    else if ((angle >= 67.5 && angle < 112.5) || (angle >= 247.5 && angle < 292.5))
+                    {
+                        mag1 = (int)magnitude[x, y - 1];
+                        mag2 = (int)magnitude[x, y + 1];
+                    }
+                    else if ((angle >= 112.5 && angle < 157.5) || (angle >= 292.5 && angle < 337.5))
+                    {
+                        mag1 = (int)magnitude[x - 1, y - 1];
+                        mag2 = (int)magnitude[x + 1, y + 1];
+                    }
+
+                    // Если текущий пиксель — максимум в направлении градиента
+                    if (mag >= mag1 && mag >= mag2)
+                        suppressed[x, y] = (int)mag;
+                    else
+                        suppressed[x, y] = 0;
+                }
+            }
+
+            // Шаг 4: Двойная пороговая фильтрация
+            int[,] thresholded = new int[width, height];
+            for (int y = 1; y < height - 1; y++)
+            {
+                for (int x = 1; x < width - 1; x++)
+                {
+                    int mag = suppressed[x, y];
+                    if (mag >= highThreshold)
+                        thresholded[x, y] = 255; // Сильный край
+                    else if (mag >= lowThreshold)
+                        thresholded[x, y] = 128; // Слабый край
+                    else
+                        thresholded[x, y] = 0; // Не край
+                }
+            }
+
+            // Шаг 5: Соединение краёв
+            for (int y = 1; y < height - 1; y++)
+            {
+                for (int x = 1; x < width - 1; x++)
+                {
+                    if (thresholded[x, y] == 128)
+                    {
+                        bool connected = false;
+                        for (int dy = -1; dy <= 1 && !connected; dy++)
+                        {
+                            for (int dx = -1; dx <= 1; dx++)
+                            {
+                                if (thresholded[x + dx, y + dy] == 255)
+                                {
+                                    connected = true;
+                                    break;
+                                }
+                            }
+                        }
+                        result[x, y] = connected ? 255 : 0;
+                    }
+                    else
+                    {
+                        result[x, y] = thresholded[x, y];
+                    }
+                }
+            }
+
+            SaveArrayAsImage(result, "3_canny.png");
+            return result;
         }
 
         private int[,] MorphologicalClosing(int[,] input)
@@ -703,14 +829,15 @@ namespace BarcodeProject.Core
             return result;
         }
 
+        // Изменено: Используем CannyEdgeDetection вместо SobelHorizontal
         public Rectangle DetectBarcodeRegion()
         {
             int[,] enhanced = EnhanceContrast(_grayImage);
             bool isLowContrast = IsLowContrast(_grayImage);
 
-            int[,] blurred = GaussianBlur(isLowContrast ? enhanced : _grayImage);
-            int[,] gradX = SobelHorizontal(blurred);
-            int[,] closed = MorphologicalClosing(gradX);
+            // Используем CannyEdgeDetection с увеличенным sigma
+            int[,] edges = CannyEdgeDetection(isLowContrast ? enhanced : _grayImage, sigma: 2.0, lowThreshold: 50, highThreshold: 100);
+            int[,] closed = MorphologicalClosing(edges);
             int[,] thresh = AdaptiveThreshold(closed);
 
             var contours = FindContours(thresh);
@@ -720,7 +847,9 @@ namespace BarcodeProject.Core
                 if (isLowContrast)
                 {
                     int[,] highPass = ApplyHighPassFilter(enhanced);
-                    thresh = AdaptiveThreshold(highPass);
+                    edges = CannyEdgeDetection(highPass, sigma: 2.0, lowThreshold: 50, highThreshold: 100);
+                    closed = MorphologicalClosing(edges);
+                    thresh = AdaptiveThreshold(edges);
                     contours = FindContours(thresh);
                 }
                 _barcodeRegion = Rectangle.Empty;
@@ -924,46 +1053,21 @@ namespace BarcodeProject.Core
                 }
             }
 
-            int[,] houghSpaceWhite = new int[maxTheta, maxRho * 2];
-            for (int y = 0; y < height; y++)
-            {
-                for (int x = 0; x < width; x++)
-                {
-                    if (binary[x, y] == 255)
-                    {
-                        for (int theta = 0; theta < maxTheta; theta++)
-                        {
-                            double rad = theta * Math.PI / 180;
-                            int rho = (int)(x * Math.Cos(rad) + y * Math.Sin(rad));
-                            houghSpaceWhite[theta, rho + maxRho]++;
-                        }
-                    }
-                }
-            }
-
-            int maxVotesBlack = 0, bestThetaBlack = 0;
-            int maxVotesWhite = 0, bestThetaWhite = 0;
+            int maxVotes = 0, bestTheta = 0;
             for (int theta = 0; theta < maxTheta; theta++)
             {
                 for (int rho = 0; rho < maxRho * 2; rho++)
                 {
-                    if (houghSpace[theta, rho] > maxVotesBlack && houghSpace[theta, rho] > minVotesThreshold)
+                    if (houghSpace[theta, rho] > maxVotes && houghSpace[theta, rho] > minVotesThreshold)
                     {
-                        maxVotesBlack = houghSpace[theta, rho];
-                        bestThetaBlack = theta;
-                    }
-                    if (houghSpaceWhite[theta, rho] > maxVotesWhite && houghSpaceWhite[theta, rho] > minVotesThreshold)
-                    {
-                        maxVotesWhite = houghSpaceWhite[theta, rho];
-                        bestThetaWhite = theta;
+                        maxVotes = houghSpace[theta, rho];
+                        bestTheta = theta;
                     }
                 }
             }
 
-            int bestTheta = maxVotesBlack > maxVotesWhite ? bestThetaBlack : bestThetaWhite;
-            double angle = bestTheta - 90;
-            if (angle < -30) angle += 180;
-            if (angle > 30) angle -= 180;
+            double angle = bestTheta;
+            if (angle > 90) angle -= 180; // Ограничение угла до [-90, 90]
             return angle;
         }
 

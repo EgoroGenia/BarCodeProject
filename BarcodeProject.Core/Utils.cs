@@ -10,7 +10,6 @@ namespace BarcodeProject.Core
         {
             if (profile.Length == 0) return new int[0];
 
-            // Локальный порог Отсу
             int windowSize = Math.Max(11, profile.Length / 20);
             if (windowSize % 2 == 0) windowSize++;
             int[] binary = new int[profile.Length];
@@ -27,8 +26,8 @@ namespace BarcodeProject.Core
                 double mean = window.Average();
                 double sumSquared = window.Sum(v => (v - mean) * (v - mean));
                 double stdDev = Math.Sqrt(sumSquared / window.Length);
-                double threshold = mean - 0.3 * stdDev; // Порог для чёрных полос
-                binary[i] = profile[i] <= threshold ? 1 : 0; // 1 для чёрных полос
+                double threshold = mean - 0.5 * stdDev; // Увеличен коэффициент для лучшей обработки разрывов
+                binary[i] = profile[i] <= threshold ? 1 : 0;
             }
 
             return binary;
