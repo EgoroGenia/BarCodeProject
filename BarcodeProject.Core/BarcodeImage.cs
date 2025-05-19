@@ -859,188 +859,388 @@ namespace BarcodeProject.Core
                 return new Bitmap(result);
             }
         }
-
         public int[] GetProfileFromRegion(Rectangle region)
         {
             if (region == Rectangle.Empty)
-            {
                 return new int[0];
-            }
 
+            // Ensure region is within image bounds
             region = Rectangle.Intersect(region, new Rectangle(0, 0, _image.Width, _image.Height));
             if (region.IsEmpty)
-            {
                 return new int[0];
-            }
 
-            int[,] roi = new int[region.Width, region.Height];
-            for (int y = 0; y < region.Height; y++)
-            {
-                for (int x = 0; x < region.Width; x++)
-                {
-                    roi[x, y] = _grayImage[region.X + x, region.Y + y];
-                }
-            }
+            // Extract region of interest (ROI)
+            int[,] roi = ExtractROI(_grayImage, region);
             SaveArrayAsImage(roi, "7_roi.png");
 
-            int[,] medianFiltered = ApplyMedianFilter(roi, region.Width, region.Height);
-            SaveArrayAsImage(medianFiltered, "8_median.png");
+            // Step 1: Enhance contrast to improve binarization
+            int[,] enhanced = EnhanceContrast(roi, region.Width, region.Height);
+            SaveArrayAsImage(enhanced, "8_enhanced.png");
 
-            int[,] binary = ApplyAdaptiveThreshold(medianFiltered, region.Width, region.Height);
-            SaveArrayAsImage(binary, "9_binary.png");
+            // Step 2: Denoise with bilateral filter to preserve edges
+            int[,] denoised = ApplyBilateralFilter(enhanced, region.Width, region.Height);
+            SaveArrayAsImage(denoised, "9_denoised.png");
 
-            int blackCount = 0, whiteCount = 0;
+            // Step 3: Robust binarization with adaptive and global thresholding
+            int[,] binary = ApplyRobustBinarization(denoised, region.Width, region.Height);
+            SaveArrayAsImage(binary, "10_binary.png");
+
+            // Step 4: Repair broken bars with morphological operations
+            int[,] repaired = RepairBrokenBars(binary, region.Width, region.Height);
+            SaveArrayAsImage(repaired, "11_repaired.png");
+
+            // Step 5: Correct for potential inversion (ensure bars are dark)
+            if (IsImageInverted(repaired, region.Width, region.Height))
+            {
+                repaired = InvertBinaryImage(repaired, region.Width, region.Height);
+                SaveArrayAsImage(repaired, "11a_inverted.png");
+            }
+
+            // Step 6: Find barcode bounds (first and last black bars)
+            (int leftBound, int rightBound) = FindBarcodeBounds(repaired, region.Width, region.Height);
+            if (leftBound >= rightBound)
+            {
+                Console.WriteLine("Warning: Could not find valid barcode bounds. Using full region.");
+                leftBound = 0;
+                rightBound = region.Width - 1;
+            }
+            int newWidth = rightBound - leftBound + 1;
+            Console.WriteLine($"Barcode bounds: left={leftBound}, right={rightBound}, newWidth={newWidth}");
+
+            // Crop the repaired image to the barcode bounds
+            int[,] cropped = new int[newWidth, region.Height];
             for (int y = 0; y < region.Height; y++)
-            {
-                for (int x = 0; x < region.Width; x++)
-                {
-                    if (binary[x, y] == 0) blackCount++;
-                    else whiteCount++;
-                }
-            }
-            if (blackCount < whiteCount)
-            {
-                for (int y = 0; y < region.Height; y++)
-                {
-                    for (int x = 0; x < region.Width; x++)
-                    {
-                        binary[x, y] = binary[x, y] == 0 ? 255 : 0;
-                    }
-                }
-            }
+                for (int x = 0; x < newWidth; x++)
+                    cropped[x, y] = repaired[x + leftBound, y];
+            SaveArrayAsImage(cropped, "11b_cropped.png");
 
-            double angle = DetectRotationAngle(binary, region.Width, region.Height);
-            int[,] rotatedBinary = RotateImage(binary, region.Width, region.Height, -angle);
-            SaveArrayAsImage(rotatedBinary, "10_rotated.png");
+            // Step 7: Deskew the barcode using improved skew detection
+            double angle = DetectSkewAngle(cropped, newWidth, region.Height);
+            int[,] deskewed = RotateImage(cropped, newWidth, region.Height, -angle);
+            SaveArrayAsImage(deskewed, "12_deskewed.png");
 
-            int[] profile = new int[region.Width];
-            for (int x = 0; x < region.Width; x++)
-            {
-                int sum = 0;
-                for (int y = 0; y < region.Height; y++)
-                {
-                    sum += rotatedBinary[x, y];
-                }
-                profile[x] = (int)((sum / (double)region.Height) * 255);
-            }
-
-            if (profile.Average() > 128)
-            {
-                for (int i = 0; i < profile.Length; i++)
-                {
-                    profile[i] = 255 - profile[i];
-                }
-            }
+            // Step 8: Generate intensity profile with robustness to distortions
+            int[] profile = GenerateRobustProfile(deskewed, newWidth, region.Height);
+            SaveProfileAsImage(profile, "13_profile.png");
 
             return profile;
         }
 
-        private int[,] ApplyMedianFilter(int[,] input, int width, int height)
+        private int EstimateMinSpaceWidth(int[,] input, int width, int height)
+        {
+            // Сканируем несколько строк (не только середину) для большей точности
+            int numScanlines = Math.Max(3, height / 20);
+            int step = height / (numScanlines + 1);
+            List<int> spaceWidths = new List<int>();
+
+            for (int s = 1; s <= numScanlines; s++)
+            {
+                int y = s * step;
+                int currentSpaceWidth = 0;
+                bool inSpace = input[0, y] == 255;
+
+                for (int x = 0; x < width; x++)
+                {
+                    if (input[x, y] == 255 && inSpace)
+                    {
+                        currentSpaceWidth++;
+                    }
+                    else if (input[x, y] == 0 && inSpace)
+                    {
+                        if (currentSpaceWidth > 0)
+                            spaceWidths.Add(currentSpaceWidth);
+                        inSpace = false;
+                        currentSpaceWidth = 0;
+                    }
+                    else if (input[x, y] == 255 && !inSpace)
+                    {
+                        inSpace = true;
+                        currentSpaceWidth = 1;
+                    }
+                }
+                if (inSpace && currentSpaceWidth > 0)
+                    spaceWidths.Add(currentSpaceWidth);
+            }
+
+            // Возвращаем минимальную ширину пробела или значение по умолчанию
+            int defaultWidth = Math.Max(1, width / 200); // Меньше для маленьких изображений
+            int minSpaceWidth = spaceWidths.Any() ? spaceWidths.Min() : defaultWidth;
+
+            // Ограничиваем minSpaceWidth для маленьких изображений
+            minSpaceWidth = Math.Min(minSpaceWidth, Math.Max(3, width / 50));
+            Console.WriteLine($"minSpaceWidth: {minSpaceWidth}, image width: {width}, height: {height}");
+            return minSpaceWidth;
+        }
+
+        private int[,] RepairBrokenBars(int[,] input, int width, int height)
         {
             int[,] result = new int[width, height];
+
+            // Оцениваем минимальную ширину пробела
+            int minSpaceWidth = EstimateMinSpaceWidth(input, width, height);
+
+            // Адаптивный размер ядра, меньше для маленьких изображений
+            int kernelWidth = Math.Max(1, minSpaceWidth / 3); // Еще меньше ядро
+            int kernelHeight = Math.Max(1, height / 300); // Минимальная высота
+            if (kernelWidth % 2 == 0) kernelWidth++;
+            if (kernelHeight % 2 == 0) kernelHeight++;
+
+            // Ограничиваем ядро для маленьких изображений
+            kernelWidth = Math.Min(kernelWidth, 3); // Не больше 3 для маленьких изображений
+            kernelHeight = Math.Min(kernelHeight, 3);
+            Console.WriteLine($"kernelWidth: {kernelWidth}, kernelHeight: {kernelHeight}");
+
+            // Дилатация: расширяем черные области (0)
+            int[,] dilated = new int[width, height];
             for (int y = 0; y < height; y++)
             {
                 for (int x = 0; x < width; x++)
                 {
-                    int[] neighbors = new int[9];
-                    int k = 0;
-                    for (int ky = -1; ky <= 1; ky++)
+                    if (y < kernelHeight / 2 || y >= height - kernelHeight / 2 ||
+                        x < kernelWidth / 2 || x >= width - kernelWidth / 2)
                     {
-                        for (int kx = -1; kx <= 1; kx++)
+                        dilated[x, y] = input[x, y]; // Копируем границы
+                        continue;
+                    }
+
+                    int minVal = 255;
+                    for (int ky = -kernelHeight / 2; ky <= kernelHeight / 2; ky++)
+                        for (int kx = -kernelWidth / 2; kx <= kernelWidth / 2; kx++)
+                            minVal = Math.Min(minVal, input[x + kx, y + ky]);
+                    dilated[x, y] = minVal;
+                }
+            }
+            SaveArrayAsImage(dilated, "11_dilated.png");
+
+            // Эрозия: восстанавливаем пробелы
+            for (int y = 0; y < height; y++)
+            {
+                for (int x = 0; x < width; x++)
+                {
+                    if (y < kernelHeight / 2 || y >= height - kernelHeight / 2 ||
+                        x < kernelWidth / 2 || x >= width - kernelWidth / 2)
+                    {
+                        result[x, y] = dilated[x, y]; // Копируем границы
+                        continue;
+                    }
+
+                    int maxVal = 0;
+                    for (int ky = -kernelHeight / 2; ky <= kernelHeight / 2; ky++)
+                        for (int kx = -kernelWidth / 2; kx <= kernelWidth / 2; kx++)
+                            maxVal = Math.Max(maxVal, dilated[x + kx, y + ky]);
+                    result[x, y] = maxVal;
+                }
+            }
+
+            return result;
+        }
+
+        private int[,] ExtractROI(int[,] input, Rectangle region)
+        {
+            int[,] roi = new int[region.Width, region.Height];
+            for (int y = 0; y < region.Height; y++)
+                for (int x = 0; x < region.Width; x++)
+                    roi[x, y] = input[region.X + x, region.Y + y];
+            return roi;
+        }
+
+        private int[,] EnhanceContrast(int[,] input, int width, int height)
+        {
+            int[,] output = new int[width, height];
+            int[] histogram = new int[256];
+            for (int y = 0; y < height; y++)
+                for (int x = 0; x < width; x++)
+                    histogram[input[x, y]]++;
+
+            int[] cdf = new int[256];
+            cdf[0] = histogram[0];
+            for (int i = 1; i < 256; i++)
+                cdf[i] = cdf[i - 1] + histogram[i];
+
+            int cdfMin = cdf.FirstOrDefault(v => v > 0);
+            int totalPixels = width * height;
+
+            for (int y = 0; y < height; y++)
+                for (int x = 0; x < width; x++)
+                {
+                    int value = input[x, y];
+                    int newValue = (int)((cdf[value] - cdfMin) * 255f / (totalPixels - cdfMin));
+                    output[x, y] = Math.Max(0, Math.Min(255, newValue));
+                }
+            return output;
+        }
+
+        private int[,] ApplyBilateralFilter(int[,] input, int width, int height)
+        {
+            int[,] result = new int[width, height];
+            int sigmaSpatial = Math.Max(5, Math.Min(width, height) / 50);
+            int sigmaRange = 30;
+            int kernelSize = sigmaSpatial * 3;
+            if (kernelSize % 2 == 0) kernelSize++;
+
+            for (int y = 0; y < height; y++)
+            {
+                for (int x = 0; x < width; x++)
+                {
+                    double sum = 0;
+                    double weightSum = 0;
+
+                    for (int ky = -kernelSize / 2; ky <= kernelSize / 2; ky++)
+                    {
+                        for (int kx = -kernelSize / 2; kx <= kernelSize / 2; kx++)
                         {
                             int nx = Math.Max(0, Math.Min(width - 1, x + kx));
                             int ny = Math.Max(0, Math.Min(height - 1, y + ky));
-                            neighbors[k++] = input[nx, ny];
+                            int intensityDiff = input[nx, ny] - input[x, y];
+                            double spatialDist = Math.Sqrt(kx * kx + ky * ky);
+
+                            double spatialWeight = Math.Exp(-spatialDist * spatialDist / (2 * sigmaSpatial * sigmaSpatial));
+                            double rangeWeight = Math.Exp(-intensityDiff * intensityDiff / (2 * sigmaRange * sigmaRange));
+                            double weight = spatialWeight * rangeWeight;
+
+                            sum += input[nx, ny] * weight;
+                            weightSum += weight;
                         }
                     }
-                    Array.Sort(neighbors);
-                    result[x, y] = neighbors[4];
+
+                    result[x, y] = (int)(sum / weightSum);
                 }
             }
             return result;
         }
 
-        private int[,] ApplyAdaptiveThreshold(int[,] input, int width, int height)
+        private int[,] ApplyRobustBinarization(int[,] input, int width, int height)
         {
             int[,] result = new int[width, height];
-            int blockSize = Math.Max(11, Math.Min(width, height) / 20);
-            if (blockSize % 2 == 0) blockSize++;
+            int windowSize = Math.Max(15, Math.Min(width, height) / 15);
+            if (windowSize % 2 == 0) windowSize++;
+            double k = 0.15;
+            double r = 128;
+
+            int globalThreshold = ComputeOtsuThreshold(input);
+            double globalVariance = ComputeImageVariance(input, width, height);
+            bool useGlobal = globalVariance < 100;
 
             for (int y = 0; y < height; y++)
             {
                 for (int x = 0; x < width; x++)
                 {
-                    int startX = Math.Max(0, x - blockSize / 2);
-                    int endX = Math.Min(width, x + blockSize / 2 + 1);
-                    int startY = Math.Max(0, y - blockSize / 2);
-                    int endY = Math.Min(height, y + blockSize / 2 + 1);
+                    if (useGlobal)
+                    {
+                        result[x, y] = input[x, y] > globalThreshold ? 255 : 0;
+                    }
+                    else
+                    {
+                        int x1 = Math.Max(0, x - windowSize / 2);
+                        int y1 = Math.Max(0, y - windowSize / 2);
+                        int x2 = Math.Min(width, x + windowSize / 2 + 1);
+                        int y2 = Math.Min(height, y + windowSize / 2 + 1);
 
-                    double sum = 0;
-                    int count = 0;
-                    for (int ky = startY; ky < endY; ky++)
-                    {
-                        for (int kx = startX; kx < endX; kx++)
-                        {
-                            sum += input[kx, ky];
-                            count++;
-                        }
+                        double sum = 0, sumSq = 0;
+                        int count = 0;
+                        for (int j = y1; j < y2; j++)
+                            for (int i = x1; i < x2; i++)
+                            {
+                                int pixel = input[i, j];
+                                sum += pixel;
+                                sumSq += pixel * pixel;
+                                count++;
+                            }
+
+                        double mean = sum / count;
+                        double variance = (sumSq - sum * sum / count) / count;
+                        double stdDev = Math.Sqrt(variance);
+
+                        double sauvolaThreshold = mean * (1 + k * (stdDev / r - 1));
+                        double threshold = variance < 50 ? globalThreshold : 0.6 * sauvolaThreshold + 0.4 * globalThreshold;
+                        result[x, y] = input[x, y] > threshold ? 255 : 0;
                     }
-                    double mean = sum / count;
-                    double sumSquared = 0;
-                    for (int ky = startY; ky < endY; ky++)
-                    {
-                        for (int kx = startX; kx < endX; kx++)
-                        {
-                            sumSquared += (input[kx, ky] - mean) * (input[kx, ky] - mean);
-                        }
-                    }
-                    double stdDev = Math.Sqrt(sumSquared / count);
-                    double threshold = mean - 0.3 * stdDev;
-                    result[x, y] = input[x, y] <= threshold ? 0 : 255;
                 }
             }
             return result;
         }
 
-        private double DetectRotationAngle(int[,] binary, int width, int height)
+        private double ComputeImageVariance(int[,] input, int width, int height)
         {
-            int maxTheta = 180;
-            int maxRho = (int)Math.Sqrt(width * width + height * height);
-            int[,] houghSpace = new int[maxTheta, maxRho * 2];
-            int minVotesThreshold = width / 10;
-
+            double sum = 0, sumSq = 0;
+            int count = width * height;
             for (int y = 0; y < height; y++)
-            {
                 for (int x = 0; x < width; x++)
                 {
+                    int pixel = input[x, y];
+                    sum += pixel;
+                    sumSq += pixel * pixel;
+                }
+            double mean = sum / count;
+            return (sumSq - sum * sum / count) / count;
+        }
+
+        private bool IsImageInverted(int[,] binary, int width, int height)
+        {
+            int blackCount = 0, total = width * height;
+            for (int y = 0; y < height; y++)
+                for (int x = 0; x < width; x++)
                     if (binary[x, y] == 0)
-                    {
+                        blackCount++;
+            return blackCount < total / 2;
+        }
+
+        private int[,] InvertBinaryImage(int[,] binary, int width, int height)
+        {
+            int[,] result = new int[width, height];
+            for (int y = 0; y < height; y++)
+                for (int x = 0; x < width; x++)
+                    result[x, y] = binary[x, y] == 0 ? 255 : 0;
+            return result;
+        }
+
+        private double DetectSkewAngle(int[,] binary, int width, int height)
+        {
+            int maxTheta = 90;
+            int maxRho = (int)Math.Sqrt(width * width + height * height);
+            int[,] houghSpace = new int[maxTheta, maxRho * 2];
+            int minVotes = Math.Max(15, Math.Min(width, height) / 10);
+
+            int[,] edges = CannyEdgeDetection(binary, 50, 100);
+            for (int y = 0; y < height; y++)
+                for (int x = 0; x < width; x++)
+                    if (edges[x, y] == 255)
                         for (int theta = 0; theta < maxTheta; theta++)
                         {
                             double rad = theta * Math.PI / 180;
                             int rho = (int)(x * Math.Cos(rad) + y * Math.Sin(rad));
                             houghSpace[theta, rho + maxRho]++;
                         }
-                    }
-                }
-            }
 
-            int maxVotes = 0, bestTheta = 0;
+            List<(int Theta, int Votes)> topAngles = new List<(int, int)>();
             for (int theta = 0; theta < maxTheta; theta++)
-            {
                 for (int rho = 0; rho < maxRho * 2; rho++)
-                {
-                    if (houghSpace[theta, rho] > maxVotes && houghSpace[theta, rho] > minVotesThreshold)
-                    {
-                        maxVotes = houghSpace[theta, rho];
-                        bestTheta = theta;
-                    }
-                }
-            }
+                    if (houghSpace[theta, rho] > minVotes)
+                        topAngles.Add((theta, houghSpace[theta, rho]));
 
-            double angle = bestTheta;
-            if (angle > 90) angle -= 180; // Ограничение угла до [-90, 90]
-            return angle;
+            if (topAngles.Count == 0)
+                return 0;
+
+            var sortedAngles = topAngles.OrderByDescending(a => a.Votes).Take(5).ToList();
+            double avgAngle = 0;
+            int totalVotes = 0;
+            foreach (var (theta, votes) in sortedAngles)
+            {
+                avgAngle += theta * votes;
+                totalVotes += votes;
+            }
+            double angle = totalVotes > 0 ? avgAngle / totalVotes : 0;
+
+            double finalAngle = angle;
+            if (finalAngle > 45)
+                finalAngle -= 90;
+            else if (finalAngle < -45)
+                finalAngle += 90;
+
+            if (Math.Abs(finalAngle) > 30)
+                finalAngle = 0;
+
+            return finalAngle;
         }
 
         private int[,] RotateImage(int[,] input, int width, int height, double angle)
@@ -1050,22 +1250,126 @@ namespace BarcodeProject.Core
             int cx = width / 2, cy = height / 2;
 
             for (int y = 0; y < height; y++)
-            {
                 for (int x = 0; x < width; x++)
                 {
                     int srcX = (int)((x - cx) * Math.Cos(rad) + (y - cy) * Math.Sin(rad) + cx);
                     int srcY = (int)(-(x - cx) * Math.Sin(rad) + (y - cy) * Math.Cos(rad) + cy);
-                    if (srcX >= 0 && srcX < width && srcY >= 0 && srcY < height)
-                    {
-                        result[x, y] = input[srcX, srcY];
-                    }
-                    else
-                    {
-                        result[x, y] = 255;
-                    }
+                    result[x, y] = (srcX >= 0 && srcX < width && srcY >= 0 && srcY < height)
+                        ? input[srcX, srcY]
+                        : 255;
                 }
-            }
             return result;
         }
+
+        private int[] GenerateRobustProfile(int[,] binary, int width, int height)
+        {
+            int numScanlines = Math.Max(5, height / 20);
+            int step = height / (numScanlines + 1);
+            List<int[]> scanlines = new List<int[]>();
+
+            for (int s = 1; s <= numScanlines; s++)
+            {
+                int y = s * step;
+                int[] scanline = new int[width];
+                for (int x = 0; x < width; x++)
+                    scanline[x] = binary[x, y];
+                scanlines.Add(scanline);
+            }
+
+            int[] profile = new int[width];
+            for (int x = 0; x < width; x++)
+            {
+                int[] values = new int[scanlines.Count];
+                for (int s = 0; s < scanlines.Count; s++)
+                    values[s] = scanlines[s][x];
+                Array.Sort(values);
+                profile[x] = values[values.Length / 2];
+            }
+
+            int[] smoothed = new int[width];
+            int windowSize = Math.Max(3, width / 100);
+            if (windowSize % 2 == 0) windowSize++;
+            for (int x = 0; x < width; x++)
+            {
+                int sum = 0, count = 0;
+                for (int k = -windowSize / 2; k <= windowSize / 2; k++)
+                {
+                    int nx = Math.Max(0, Math.Min(width - 1, x + k));
+                    sum += profile[nx];
+                    count++;
+                }
+                smoothed[x] = sum / count;
+            }
+
+            return smoothed;
+        }
+
+
+        private void SaveProfileAsImage(int[] profile, string filename)
+        {
+            int width = profile.Length;
+            int height = 100;
+            using (Bitmap bmp = new Bitmap(width, height, PixelFormat.Format24bppRgb))
+            {
+                for (int x = 0; x < width; x++)
+                {
+                    int value = profile[x];
+                    for (int y = 0; y < height; y++)
+                    {
+                        Color color = Color.FromArgb(value, value, value);
+                        bmp.SetPixel(x, y, color);
+                    }
+                }
+                try
+                {
+                    bmp.Save(filename, ImageFormat.Png);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Error saving {filename}: {ex.Message}");
+                }
+            }
+        }
+
+        private (int leftBound, int rightBound) FindBarcodeBounds(int[,] input, int width, int height)
+        {
+            int leftBound = -1, rightBound = -1;
+            int blackThreshold = height / 2; // Требуется не менее 50% черных пикселей в столбце
+
+            // Найти левую границу (первую черную полосу)
+            for (int x = 0; x < width; x++)
+            {
+                int blackCount = 0;
+                for (int y = 0; y < height; y++)
+                    if (input[x, y] == 0)
+                        blackCount++;
+                if (blackCount >= blackThreshold)
+                {
+                    leftBound = x;
+                    break;
+                }
+            }
+
+            // Найти правую границу (последнюю черную полосу)
+            for (int x = width - 1; x >= 0; x--)
+            {
+                int blackCount = 0;
+                for (int y = 0; y < height; y++)
+                    if (input[x, y] == 0)
+                        blackCount++;
+                if (blackCount >= blackThreshold)
+                {
+                    rightBound = x;
+                    break;
+                }
+            }
+
+            // Если границы не найдены, вернуть полную ширину
+            if (leftBound == -1 || rightBound == -1)
+                return (0, width - 1);
+
+            return (leftBound, rightBound);
+        }
+
     }
 }
