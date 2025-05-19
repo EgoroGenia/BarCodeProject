@@ -26,7 +26,7 @@ namespace BarcodeProject.Core
             }
             _grayImage = ConvertToGrayscale(_image);
         }
-
+        //Градации серого
         private int[,] ConvertToGrayscale(Bitmap bmp)
         {
             int width = bmp.Width;
@@ -165,7 +165,7 @@ namespace BarcodeProject.Core
             return result;
         }
 
-        // Новый метод: Кэнни для обнаружения краёв
+        // Кэнни для обнаружения краёв
         private int[,] CannyEdgeDetection(int[,] input, int lowThreshold = 50, int highThreshold = 100)
         {
             int width = input.GetLength(0);
