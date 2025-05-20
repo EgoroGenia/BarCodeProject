@@ -105,7 +105,7 @@
             // lblResult
             // 
             this.lblResult.AutoSize = true;
-            this.lblResult.Location = new System.Drawing.Point(862, 135);
+            this.lblResult.Location = new System.Drawing.Point(865, 93);
             this.lblResult.Name = "lblResult";
             this.lblResult.Size = new System.Drawing.Size(62, 13);
             this.lblResult.TabIndex = 2;
@@ -138,9 +138,9 @@
             // 
             // rtbResult
             // 
-            this.rtbResult.Location = new System.Drawing.Point(865, 151);
+            this.rtbResult.Location = new System.Drawing.Point(865, 109);
             this.rtbResult.Name = "rtbResult";
-            this.rtbResult.Size = new System.Drawing.Size(211, 348);
+            this.rtbResult.Size = new System.Drawing.Size(211, 269);
             this.rtbResult.TabIndex = 10;
             this.rtbResult.Text = "";
             // 
