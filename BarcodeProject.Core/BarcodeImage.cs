@@ -135,29 +135,54 @@ namespace BarcodeProject.Core
             return output;
         }
 
-        private int[,] GaussianBlur(int[,] input)
+        private int[,] GaussianBlur(int[,] input, double sigma = 1.4)
         {
             int width = _image.Width;
             int height = _image.Height;
             int[,] result = new int[width, height];
-            float[] kernel = { 1, 4, 7, 4, 1, 4, 16, 26, 16, 4, 6, 26, 41, 26, 6, 4, 16, 26, 16, 4, 1, 4, 7, 4, 1 };
-            float kernelSum = 256;
 
-            for (int y = 2; y < height - 2; y++)
+            // Вычисляем размер ядра: kernelSize = 2 * ceil(3 * sigma) + 1
+            int kernelSize = (int)(2 * Math.Ceiling(3 * sigma) + 1);
+            int halfKernel = kernelSize / 2;
+            float[,] kernel = new float[kernelSize, kernelSize];
+            float kernelSum = 0;
+
+            // Создаём Гауссово ядро
+            for (int ky = -halfKernel; ky <= halfKernel; ky++)
             {
-                for (int x = 2; x < width - 2; x++)
+                for (int kx = -halfKernel; kx <= halfKernel; kx++)
+                {
+                    float value = (float)(Math.Exp(-(kx * kx + ky * ky) / (2 * sigma * sigma)) / (2 * Math.PI * sigma * sigma));
+                    kernel[ky + halfKernel, kx + halfKernel] = value;
+                    kernelSum += value;
+                }
+            }
+
+            // Нормализуем ядро
+            for (int ky = 0; ky < kernelSize; ky++)
+            {
+                for (int kx = 0; kx < kernelSize; kx++)
+                {
+                    kernel[ky, kx] /= kernelSum;
+                }
+            }
+
+            // Применяем свёртку
+            for (int y = halfKernel; y < height - halfKernel; y++)
+            {
+                for (int x = halfKernel; x < width - halfKernel; x++)
                 {
                     float sum = 0;
-                    int k = 0;
-                    for (int ky = -2; ky <= 2; ky++)
+                    for (int ky = -halfKernel; ky <= halfKernel; ky++)
                     {
-                        for (int kx = -2; kx <= 2; kx++)
+                        for (int kx = -halfKernel; kx <= halfKernel; kx++)
                         {
-                            sum += input[x + kx, y + ky] * kernel[k];
-                            k++;
+                            sum += input[x + kx, y + ky] * kernel[ky + halfKernel, kx + halfKernel];
                         }
                     }
-                    result[x, y] = (int)(sum / kernelSum);
+                    result[x, y] = (int)Math.Round(sum);
+                    if (result[x, y] < 0) result[x, y] = 0;
+                    if (result[x, y] > 255) result[x, y] = 255;
                 }
             }
 
@@ -166,13 +191,16 @@ namespace BarcodeProject.Core
         }
 
         // Кэнни для обнаружения краёв
-        private int[,] CannyEdgeDetection(int[,] input, int lowThreshold = 50, int highThreshold = 100)
+        private int[,] CannyEdgeDetection(int[,] input, double sigma = 1.4, int lowThreshold = 50, int highThreshold = 100)
         {
             int width = input.GetLength(0);
             int height = input.GetLength(1);
             int[,] result = new int[width, height];
 
-            // Шаг 1: Вычисление градиентов (Собель для горизонтального и вертикального направлений)
+            // Шаг 1: Гауссово размытие с заданным sigma
+            int[,] blurred = GaussianBlur(input, sigma);
+
+            // Шаг 2: Вычисление градиентов (Собель для горизонтального и вертикального направлений)
             double[,] gradX = new double[width, height];
             double[,] gradY = new double[width, height];
             double[,] magnitude = new double[width, height];
@@ -183,11 +211,11 @@ namespace BarcodeProject.Core
                 for (int x = 1; x < width - 1; x++)
                 {
                     // Горизонтальный градиент
-                    gradX[x, y] = -input[x - 1, y - 1] - 2 * input[x - 1, y] - input[x - 1, y + 1] +
-                                   input[x + 1, y - 1] + 2 * input[x + 1, y] + input[x + 1, y + 1];
+                    gradX[x, y] = -blurred[x - 1, y - 1] - 2 * blurred[x - 1, y] - blurred[x - 1, y + 1] +
+                                   blurred[x + 1, y - 1] + 2 * blurred[x + 1, y] + blurred[x + 1, y + 1];
                     // Вертикальный градиент
-                    gradY[x, y] = -input[x - 1, y - 1] - 2 * input[x, y - 1] - input[x + 1, y - 1] +
-                                   input[x - 1, y + 1] + 2 * input[x, y + 1] + input[x + 1, y + 1];
+                    gradY[x, y] = -blurred[x - 1, y - 1] - 2 * blurred[x, y - 1] - blurred[x + 1, y - 1] +
+                                   blurred[x - 1, y + 1] + 2 * blurred[x, y + 1] + blurred[x + 1, y + 1];
                     // Величина градиента
                     magnitude[x, y] = Math.Sqrt(gradX[x, y] * gradX[x, y] + gradY[x, y] * gradY[x, y]);
                     // Направление градиента (в градусах)
@@ -196,7 +224,7 @@ namespace BarcodeProject.Core
                 }
             }
 
-            // Шаг 2: Подавление немаксимумов
+            // Шаг 3: Подавление немаксимумов
             int[,] suppressed = new int[width, height];
             for (int y = 1; y < height - 1; y++)
             {
@@ -236,7 +264,7 @@ namespace BarcodeProject.Core
                 }
             }
 
-            // Шаг 3: Двойная пороговая фильтрация
+            // Шаг 4: Двойная пороговая фильтрация
             int[,] thresholded = new int[width, height];
             for (int y = 1; y < height - 1; y++)
             {
@@ -252,7 +280,7 @@ namespace BarcodeProject.Core
                 }
             }
 
-            // Шаг 4: Соединение краёв
+            // Шаг 5: Соединение краёв
             for (int y = 1; y < height - 1; y++)
             {
                 for (int x = 1; x < width - 1; x++)
@@ -643,15 +671,15 @@ namespace BarcodeProject.Core
             }
         }
 
-      
+
 
         public Rectangle DetectBarcodeRegion()
         {
             int[,] enhanced = EnhanceContrast(_grayImage);
             bool isLowContrast = IsLowContrast(_grayImage);
 
-            int[,] blurred = GaussianBlur(isLowContrast ? enhanced : _grayImage);
-            int[,] edges = CannyEdgeDetection(blurred, 50, 100);
+            // Используем CannyEdgeDetection с увеличенным sigma
+            int[,] edges = CannyEdgeDetection(isLowContrast ? enhanced : _grayImage, sigma: 1.5, lowThreshold: 50, highThreshold: 100);
             int[,] closed = MorphologicalClosing(edges);
             int[,] thresh = AdaptiveThreshold(closed);
 
@@ -662,7 +690,7 @@ namespace BarcodeProject.Core
                 if (isLowContrast)
                 {
                     int[,] highPass = ApplyHighPassFilter(enhanced);
-                    edges = CannyEdgeDetection(highPass, 50, 100);
+                    edges = CannyEdgeDetection(highPass, sigma: 2.0, lowThreshold: 50, highThreshold: 100);
                     closed = MorphologicalClosing(edges);
                     thresh = AdaptiveThreshold(edges);
                     contours = FindContours(thresh);
