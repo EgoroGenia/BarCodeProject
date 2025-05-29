@@ -93,20 +93,10 @@ namespace BarcodeDecoderWinForms
                 return;
             }
 
-            if (cmbBarcodeType.SelectedItem == null)
-            {
-                rtbResult.Clear();
-                rtbResult.Text = "Выберите тип штрих-кода.";
-                return;
-            }
-
             try
             {
                 int[] profile = _barcodeImage.GetProfileFromRegion(_barcodeRegion);
-                string result = BarcodeAnalyzer.AnalyzeBarcode(profile, cmbBarcodeType.SelectedItem.ToString());
-                rtbResult.Clear();
-                rtbResult.Text = result;
-
+                string result = BarcodeAnalyzer.AnalyzeBarcode(profile, "EAN-13");
                 var binary = Utils.Binarize(profile);
                 var rle = Utils.RLE(binary);
                 var (bitString, isValid) = Utils.ConvertToBitString(rle);
@@ -124,6 +114,8 @@ namespace BarcodeDecoderWinForms
                 {
                     rtbResult.AppendText($"\r\nОшибка при сохранении отладочных файлов: {ex.Message}");
                 }
+                rtbResult.Clear();
+                rtbResult.Text = $"Результат: {result}";
             }
             catch (Exception ex)
             {
@@ -132,6 +124,6 @@ namespace BarcodeDecoderWinForms
             }
         }
 
-        
+
     }
 }
