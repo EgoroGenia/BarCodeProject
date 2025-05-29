@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 
 namespace BarcodeProject.Core
 {
@@ -64,69 +65,167 @@ namespace BarcodeProject.Core
         {
             if (rle == null || rle.Count == 0) return ("", false);
 
-            var lengths = rle.Select(item => item.length).Where(l => l > 0).ToList();
+            // Шаг 1: Удаление начальных и конечных белых участков (пробелов, value == 0)
+            var trimmedRle = TrimWhitespace(rle);
+            if (trimmedRle.Count == 0) return ("", false);
+
+            // Шаг 2: Поиск стартового узора
+            (int startIndex, bool isReversed) = FindStartPattern(trimmedRle, barcodeType);
+            if (startIndex < 0)
+            {
+                return ("", false);
+            }
+
+            // Обрезаем RLE до начала стартового узора
+            trimmedRle = trimmedRle.Skip(startIndex).ToList();
+
+            // Шаг 3: Оценка moduleSize
+            var lengths = trimmedRle.Select(item => item.length).Where(l => l > 0).ToList();
             if (lengths.Count == 0) return ("", false);
 
-            // Оценка moduleSize: медиана длин в 5–95 перцентилях
-            var sortedLengths = lengths.OrderBy(l => l).ToList();
-            int lower = (int)(sortedLengths.Count * 0.05);
-            int upper = (int)(sortedLengths.Count * 0.95);
-            var filteredLengths = sortedLengths.Skip(lower).Take(upper - lower).ToList();
-            double moduleSize = filteredLengths.Any() ? filteredLengths.Median() : lengths.Min();
+            double moduleSize = lengths.Median();
+            if (barcodeType == "EAN-13" && trimmedRle.Count >= 3)
+            {
+                var startGuardRle = trimmedRle.Take(3).ToList(); // "101" = 3 модуля
+                double guardModuleSize = startGuardRle.Sum(item => item.length) / 3.0;
+                moduleSize = Math.Max(moduleSize, guardModuleSize);
+            }
+            else if (barcodeType == "Code128" && trimmedRle.Count >= 4)
+            {
+                var startGuardRle = trimmedRle.Take(4).ToList(); // Code 128 start pattern
+                double guardModuleSize = startGuardRle.Sum(item => item.length) / 4.0;
+                moduleSize = Math.Max(moduleSize, guardModuleSize);
+            }
             if (moduleSize < 1) moduleSize = 1;
 
-            // Объединяем короткие последовательности (шум)
+            // Шаг 4: Объединяем короткие последовательности
             var cleanedRle = new List<(int value, int length)>();
-            int currentValue = rle[0].value;
-            int currentLength = rle[0].length;
-            for (int i = 1; i < rle.Count; i++)
+            int currentValue = trimmedRle[0].value;
+            int currentLength = trimmedRle[0].length;
+            for (int i = 1; i < trimmedRle.Count; i++)
             {
-                if (rle[i].length < 0.5 * moduleSize && rle[i].value != currentValue)
+                if (i > 0 && i < trimmedRle.Count - 1 && trimmedRle[i].length < 0.3 * moduleSize && trimmedRle[i].value != currentValue)
                 {
-                    currentLength += rle[i].length; // Сливаем с предыдущей
+                    currentLength += trimmedRle[i].length;
                 }
                 else
                 {
                     cleanedRle.Add((currentValue, currentLength));
-                    currentValue = rle[i].value;
-                    currentLength = rle[i].length;
+                    currentValue = trimmedRle[i].value;
+                    currentLength = trimmedRle[i].length;
                 }
             }
             cleanedRle.Add((currentValue, currentLength));
 
-            // Нормализация с гибкими диапазонами
+            // Шаг 5: Нормализация и формирование битовой строки
             string bitString = "";
             int totalModules = 0;
             foreach (var item in cleanedRle)
             {
                 double normalized = item.length / moduleSize;
                 int modules;
-                if (normalized >= 0.7 && normalized <= 1.3) modules = 1;
-                else if (normalized >= 1.7 && normalized <= 2.3) modules = 2;
-                else if (normalized >= 2.7 && normalized <= 3.3) modules = 3;
-                else if (normalized >= 3.7 && normalized <= 4.3) modules = 4;
+                if (normalized >= 0.5 && normalized <= 1.5) modules = 1;
+                else if (normalized >= 1.5 && normalized <= 2.5) modules = 2;
+                else if (normalized >= 2.5 && normalized <= 3.5) modules = 3;
+                else if (normalized >= 3.5 && normalized <= 4.5) modules = 4;
                 else modules = (int)Math.Round(normalized);
                 if (modules < 1) modules = 1;
                 totalModules += modules;
-                // Инверсия: 0 (пробел) -> 1, 1 (штрих) -> 0
-                string value = item.value == 1 ? "0" : "1";
+                string value = item.value == 1 ? "1" : "0"; // 1 = штрих (чёрный), 0 = пробел (белый)
                 bitString += string.Join("", Enumerable.Repeat(value, modules));
             }
 
-            // Валидация передана в другой модуль, возвращаем строку и общее количество модулей
-            bool isValid = true; // По умолчанию true, так как проверка в другом модуле
-            return (bitString, isValid); // 0 = штрих (чёрный), 1 = пробел (белый)
+            // Если штрих-код перевёрнут, инвертируем битовую строку
+            if (isReversed)
+            {
+                bitString = new string(bitString.Reverse().ToArray());
+            }
+
+            // Шаг 6: Проверка валидности
+            bool isValid = barcodeType == "EAN-13" ? totalModules == 95 : totalModules >= 35;
+            return (bitString, isValid);
         }
 
-        // Вспомогательный метод для медианы
-        private static double Median(this List<int> values)
+        public static List<(int value, int length)> TrimWhitespace(List<(int value, int length)> rle)
         {
-            if (!values.Any()) return 0;
-            values.Sort();
-            int mid = values.Count / 2;
-            return values.Count % 2 == 0
-                ? (values[mid - 1] + values[mid]) / 2.0
-                : values[mid];
+            if (rle == null || rle.Count == 0) return rle;
+
+            // Удаляем начальные и конечные пробелы (value == 0)
+            int start = 0;
+            while (start < rle.Count && rle[start].value == 0)
+                start++;
+
+            int end = rle.Count - 1;
+            while (end >= 0 && rle[end].value == 0)
+                end--;
+
+            if (start > end) return new List<(int value, int length)>();
+            return rle.Skip(start).Take(end - start + 1).ToList();
+        }
+
+        private static (int startIndex, bool isReversed) FindStartPattern(List<(int value, int length)> rle, string barcodeType)
+        {
+            string[] expectedPatterns = barcodeType == "EAN-13"
+                ? new[] { "101" }
+                : new[] { "11010010000", "11010011000", "11010011100" }; // Code 128 start patterns
+
+            // Преобразуем RLE в битовую строку для поиска узора
+            double moduleSize = rle.Select(item => item.length).Where(l => l > 0).Median();
+            if (moduleSize < 1) moduleSize = 1;
+
+            StringBuilder tempBitString = new StringBuilder();
+            foreach (var item in rle)
+            {
+                int modules = (int)Math.Round(item.length / moduleSize);
+                if (modules < 1) modules = 1;
+                string value = item.value == 1 ? "1" : "0";
+                tempBitString.Append(string.Join("", Enumerable.Repeat(value, modules)));
+            }
+
+            string bitString = tempBitString.ToString();
+            foreach (var pattern in expectedPatterns)
+            {
+                int index = bitString.IndexOf(pattern);
+                if (index >= 0)
+                {
+                    // Находим индекс в RLE, соответствующий началу узора
+                    int totalModules = 0;
+                    for (int i = 0; i < rle.Count; i++)
+                    {
+                        int modules = (int)Math.Round(rle[i].length / moduleSize);
+                        if (modules < 1) modules = 1;
+                        if (totalModules + modules > index)
+                        {
+                            return (i, false);
+                        }
+                        totalModules += modules;
+                    }
+                    return (0, false);
+                }
+            }
+
+            // Проверяем инвертированную строку
+            string reversedBitString = new string(bitString.Reverse().ToArray());
+            foreach (var pattern in expectedPatterns)
+            {
+                int index = reversedBitString.IndexOf(pattern);
+                if (index >= 0)
+                {
+                    return (0, true); // Перевёрнутый штрих-код, начинаем с начала
+                }
+            }
+
+            return (-1, false);
+        }
+
+        public static double Median(this IEnumerable<int> values)
+        {
+            if (values == null || !values.Any()) return 0;
+            var sortedValues = values.OrderBy(x => x).ToList();
+            int mid = sortedValues.Count / 2;
+            return sortedValues.Count % 2 == 0
+                ? (sortedValues[mid - 1] + sortedValues[mid]) / 2.0
+                : sortedValues[mid];
         }
 
         public static int[] NormalizeProfile(int[] profile)

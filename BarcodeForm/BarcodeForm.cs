@@ -4,6 +4,7 @@ using System.Windows.Forms;
 using BarcodeProject.Core;
 using System.IO;
 using System.Linq;
+using System.Collections.Generic;
 
 namespace BarcodeDecoderWinForms
 {
@@ -96,24 +97,42 @@ namespace BarcodeDecoderWinForms
             try
             {
                 int[] profile = _barcodeImage.GetProfileFromRegion(_barcodeRegion);
-                string result = BarcodeAnalyzer.AnalyzeBarcode(profile, "EAN-13");
                 var binary = Utils.Binarize(profile);
                 var rle = Utils.RLE(binary);
-                var (bitString, isValid) = Utils.ConvertToBitString(rle);
+                var trimmedRle = Utils.TrimWhitespace(rle); // Получаем обрезанный RLE
+                var (bitString, isValid) = Utils.ConvertToBitString(rle, "EAN-13");
+                string result = BarcodeAnalyzer.AnalyzeBarcode(profile, "EAN-13");
+
                 try
                 {
+                    // Сохраняем отладочные данные
                     File.WriteAllText("binary_profile.txt", bitString);
                     File.WriteAllText("rle_debug.txt", string.Join(", ", rle.Select(item => $"({item.value}, {item.length})")));
+                    File.WriteAllText("rle_trimmed.txt", trimmedRle.Any()
+                        ? string.Join(", ", trimmedRle.Select(item => $"({item.value}, {item.length})"))
+                        : "Обрезанный RLE пуст");
+                    File.WriteAllText("debug_log.txt",
+                        $"Длина профиля: {profile.Length}\r\n" +
+                        $"Длина битовой строки: {bitString.Length}\r\n" +
+                        $"Первые 20 символов битовой строки: {bitString.Substring(0, Math.Min(20, bitString.Length))}\r\n" +
+                        $"Валидность: {isValid}\r\n" +
+                        $"ModuleSize: {CalculateModuleSize(trimmedRle, "EAN-13")}\r\n" +
+                        $"Общее количество модулей: {CalculateTotalModules(trimmedRle, "EAN-13")}"
+                    );
+
                     rtbResult.AppendText($"\r\nБинарный профиль сохранён в binary_profile.txt");
                     rtbResult.AppendText($"\r\nRLE сохранён в rle_debug.txt");
+                    rtbResult.AppendText($"\r\nОбрезанный RLE сохранён в rle_trimmed.txt");
                     rtbResult.AppendText($"\r\nДлина профиля: {profile.Length}");
                     rtbResult.AppendText($"\r\nДлина битовой строки: {bitString.Length}");
                     rtbResult.AppendText($"\r\nПервые 20 символов битовой строки: {bitString.Substring(0, Math.Min(20, bitString.Length))}");
+                    rtbResult.AppendText($"\r\nВалидность: {isValid}");
                 }
                 catch (Exception ex)
                 {
                     rtbResult.AppendText($"\r\nОшибка при сохранении отладочных файлов: {ex.Message}");
                 }
+
                 rtbResult.Clear();
                 rtbResult.Text = $"Результат: {result}";
             }
@@ -124,6 +143,42 @@ namespace BarcodeDecoderWinForms
             }
         }
 
+        // Вспомогательный метод для вычисления moduleSize (для отладки)
+        private static double CalculateModuleSize(List<(int value, int length)> rle, string barcodeType)
+        {
+            var lengths = rle.Select(item => item.length).Where(l => l > 0).ToList();
+            if (lengths.Count == 0) return 0;
+
+            double moduleSize = lengths.Median();
+            if (barcodeType == "EAN-13" && rle.Count >= 3)
+            {
+                var startGuardRle = rle.Take(3).ToList();
+                double guardModuleSize = startGuardRle.Sum(item => item.length) / 3.0;
+                moduleSize = Math.Max(moduleSize, guardModuleSize);
+            }
+            else if (barcodeType == "Code128" && rle.Count >= 4)
+            {
+                var startGuardRle = rle.Take(4).ToList();
+                double guardModuleSize = startGuardRle.Sum(item => item.length) / 4.0;
+                moduleSize = Math.Max(moduleSize, guardModuleSize);
+            }
+            return moduleSize < 1 ? 1 : moduleSize;
+        }
+
+        // Вспомогательный метод для вычисления общего количества модулей (для отладки)
+        private static int CalculateTotalModules(List<(int value, int length)> rle, string barcodeType)
+        {
+            double moduleSize = CalculateModuleSize(rle, barcodeType);
+            int totalModules = 0;
+            foreach (var item in rle)
+            {
+                double normalized = item.length / moduleSize;
+                int modules = (int)Math.Round(normalized);
+                if (modules < 1) modules = 1;
+                totalModules += modules;
+            }
+            return totalModules;
+        }
 
     }
 }
