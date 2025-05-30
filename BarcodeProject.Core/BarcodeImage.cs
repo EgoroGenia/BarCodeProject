@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.Linq;
+using System.Runtime.InteropServices;
+using System.Threading.Tasks;
 
 namespace BarcodeProject.Core
 {
@@ -34,14 +36,36 @@ namespace BarcodeProject.Core
             int height = bmp.Height;
             int[,] gray = new int[width, height];
 
-            for (int y = 0; y < height; y++)
+            // Блокируем данные изображения
+            BitmapData bmpData = bmp.LockBits(
+                new Rectangle(0, 0, width, height),
+                ImageLockMode.ReadOnly,
+                PixelFormat.Format24bppRgb);
+
+            try
             {
-                for (int x = 0; x < width; x++)
+                int stride = bmpData.Stride;
+                IntPtr scan0 = bmpData.Scan0;
+                byte[] pixels = new byte[stride * height];
+                Marshal.Copy(scan0, pixels, 0, pixels.Length);
+
+                Parallel.For(0, height, y =>
                 {
-                    Color pixel = bmp.GetPixel(x, y);
-                    int luminance = (int)(0.299 * pixel.R + 0.587 * pixel.G + 0.114 * pixel.B);
-                    gray[x, y] = luminance;
-                }
+                    int rowOffset = y * stride;
+                    for (int x = 0; x < width; x++)
+                    {
+                        int pixelOffset = rowOffset + x * 3; // 3 байта на пиксель (BGR)
+                        byte b = pixels[pixelOffset];
+                        byte g = pixels[pixelOffset + 1];
+                        byte r = pixels[pixelOffset + 2];
+                        int luminance = (int)(0.299 * r + 0.587 * g + 0.114 * b);
+                        gray[x, y] = luminance;
+                    }
+                });
+            }
+            finally
+            {
+                bmp.UnlockBits(bmpData);
             }
 
             SaveArrayAsImage(gray, "1_grayscale.png");
