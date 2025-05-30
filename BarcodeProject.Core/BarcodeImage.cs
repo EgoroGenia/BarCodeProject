@@ -372,9 +372,16 @@ namespace BarcodeProject.Core
                 for (int x = 0; x < width; x++)
                     histogram[input[x, y]]++;
 
+            // Сглаживание гистограммы
+            int[] smoothedHistogram = new int[256];
+            for (int i = 1; i < 254; i++)
+                smoothedHistogram[i] = (histogram[i - 1] + histogram[i] + histogram[i + 1]) / 3;
+            smoothedHistogram[0] = histogram[0];
+            smoothedHistogram[255] = histogram[255];
+
             float sum = 0;
             for (int i = 0; i < 256; i++)
-                sum += i * histogram[i];
+                sum += i * smoothedHistogram[i];
             float sumB = 0;
             int wB = 0, wF = 0;
             float maxVariance = 0;
@@ -382,11 +389,11 @@ namespace BarcodeProject.Core
 
             for (int t = 0; t < 256; t++)
             {
-                wB += histogram[t];
+                wB += smoothedHistogram[t];
                 if (wB == 0) continue;
                 wF = totalPixels - wB;
                 if (wF == 0) break;
-                sumB += t * histogram[t];
+                sumB += t * smoothedHistogram[t];
                 float mB = sumB / wB;
                 float mF = (sum - sumB) / wF;
                 float variance = wB * wF * (mB - mF) * (mB - mF);
@@ -399,7 +406,56 @@ namespace BarcodeProject.Core
 
             return threshold;
         }
+        private int[,] MorphologicalOpening(int[,] input, int kernelWidth = 3, int kernelHeight = 3)
+        {
+            int width = input.GetLength(0);
+            int height = input.GetLength(1);
+            int[,] eroded = new int[width, height];
+            int[,] result = new int[width, height];
+            int halfKw = kernelWidth / 2;
+            int halfKh = kernelHeight / 2;
 
+            // Эрозия
+            for (int y = halfKh; y < height - halfKh; y++)
+            {
+                for (int x = halfKw; x < width - halfKw; x++)
+                {
+                    int minVal = 255;
+                    for (int ky = -halfKh; ky <= halfKh; ky++)
+                        for (int kx = -halfKw; kx <= halfKw; kx++)
+                        {
+                            int val = input[x + kx, y + ky];
+                            if (val < minVal) minVal = val;
+                        }
+                    eroded[x, y] = minVal;
+                }
+            }
+
+            // Дилатация
+            for (int y = halfKh; y < height - halfKh; y++)
+            {
+                for (int x = halfKw; x < width - halfKw; x++)
+                {
+                    int maxVal = 0;
+                    for (int ky = -halfKh; ky <= halfKh; ky++)
+                        for (int kx = -halfKw; kx <= halfKw; kx++)
+                        {
+                            int val = eroded[x + kx, y + ky];
+                            if (val > maxVal) maxVal = val;
+                        }
+                    result[x, y] = maxVal;
+                }
+            }
+
+            // Копирование границ
+            for (int y = 0; y < height; y++)
+                for (int x = 0; x < width; x++)
+                    if (y < halfKh || y >= height - halfKh || x < halfKw || x >= width - halfKw)
+                        result[x, y] = input[x, y];
+
+            SaveArrayAsImage(result, "5.5_morph_opening.png");
+            return result;
+        }
         private int[,] AdaptiveThreshold(int[,] input)
         {
             int width = input.GetLength(0);
@@ -444,8 +500,8 @@ namespace BarcodeProject.Core
                     result[x, y] = input[x, y] > blendedThreshold ? 255 : 0;
                 }
             }
-
-            SaveArrayAsImage(result, "5_threshold_improved.png");
+            result = MorphologicalOpening(result, kernelWidth: 3, kernelHeight: 3); // Добавить открытие
+           SaveArrayAsImage(result, "5_threshold_improved.png");
             return result;
         }
 
