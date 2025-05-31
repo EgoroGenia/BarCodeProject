@@ -121,6 +121,7 @@
             this.cmbBarcodeType.Name = "cmbBarcodeType";
             this.cmbBarcodeType.Size = new System.Drawing.Size(211, 21);
             this.cmbBarcodeType.TabIndex = 5;
+            this.cmbBarcodeType.Text = "EAN-13";
             // 
             // label1
             // 
