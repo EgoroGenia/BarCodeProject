@@ -372,16 +372,9 @@ namespace BarcodeProject.Core
                 for (int x = 0; x < width; x++)
                     histogram[input[x, y]]++;
 
-            // Сглаживание гистограммы
-            int[] smoothedHistogram = new int[256];
-            for (int i = 1; i < 254; i++)
-                smoothedHistogram[i] = (histogram[i - 1] + histogram[i] + histogram[i + 1]) / 3;
-            smoothedHistogram[0] = histogram[0];
-            smoothedHistogram[255] = histogram[255];
-
             float sum = 0;
             for (int i = 0; i < 256; i++)
-                sum += i * smoothedHistogram[i];
+                sum += i * histogram[i];
             float sumB = 0;
             int wB = 0, wF = 0;
             float maxVariance = 0;
@@ -389,11 +382,11 @@ namespace BarcodeProject.Core
 
             for (int t = 0; t < 256; t++)
             {
-                wB += smoothedHistogram[t];
+                wB += histogram[t];
                 if (wB == 0) continue;
                 wF = totalPixels - wB;
                 if (wF == 0) break;
-                sumB += t * smoothedHistogram[t];
+                sumB += t * histogram[t];
                 float mB = sumB / wB;
                 float mF = (sum - sumB) / wF;
                 float variance = wB * wF * (mB - mF) * (mB - mF);
@@ -406,56 +399,7 @@ namespace BarcodeProject.Core
 
             return threshold;
         }
-        private int[,] MorphologicalOpening(int[,] input, int kernelWidth = 3, int kernelHeight = 3)
-        {
-            int width = input.GetLength(0);
-            int height = input.GetLength(1);
-            int[,] eroded = new int[width, height];
-            int[,] result = new int[width, height];
-            int halfKw = kernelWidth / 2;
-            int halfKh = kernelHeight / 2;
 
-            // Эрозия
-            for (int y = halfKh; y < height - halfKh; y++)
-            {
-                for (int x = halfKw; x < width - halfKw; x++)
-                {
-                    int minVal = 255;
-                    for (int ky = -halfKh; ky <= halfKh; ky++)
-                        for (int kx = -halfKw; kx <= halfKw; kx++)
-                        {
-                            int val = input[x + kx, y + ky];
-                            if (val < minVal) minVal = val;
-                        }
-                    eroded[x, y] = minVal;
-                }
-            }
-
-            // Дилатация
-            for (int y = halfKh; y < height - halfKh; y++)
-            {
-                for (int x = halfKw; x < width - halfKw; x++)
-                {
-                    int maxVal = 0;
-                    for (int ky = -halfKh; ky <= halfKh; ky++)
-                        for (int kx = -halfKw; kx <= halfKw; kx++)
-                        {
-                            int val = eroded[x + kx, y + ky];
-                            if (val > maxVal) maxVal = val;
-                        }
-                    result[x, y] = maxVal;
-                }
-            }
-
-            // Копирование границ
-            for (int y = 0; y < height; y++)
-                for (int x = 0; x < width; x++)
-                    if (y < halfKh || y >= height - halfKh || x < halfKw || x >= width - halfKw)
-                        result[x, y] = input[x, y];
-
-            SaveArrayAsImage(result, "5.5_morph_opening.png");
-            return result;
-        }
         private int[,] AdaptiveThreshold(int[,] input)
         {
             int width = input.GetLength(0);
@@ -500,78 +444,15 @@ namespace BarcodeProject.Core
                     result[x, y] = input[x, y] > blendedThreshold ? 255 : 0;
                 }
             }
-            result = MorphologicalOpening(result, kernelWidth: 3, kernelHeight: 3); // Добавить открытие
-           SaveArrayAsImage(result, "5_threshold_improved.png");
+
+            SaveArrayAsImage(result, "5_threshold_improved.png");
             return result;
         }
-        private int[,] MorphologicalClosingLargeKernel(int[,] input)
-        {
-            int width = input.GetLength(0);
-            int height = input.GetLength(1);
-            int[,] dilated = new int[width, height];
-            int[,] result = new int[width, height];
 
-            // Увеличить размер ядра для заполнения широких полос
-            int kw = Math.Max(15, width / 30); // Увеличенный размер ядра по ширине
-            int kh = Math.Max(7, height / 60); // Меньший размер по высоте
-
-            // Дилатация
-            for (int y = kh / 2; y < height - kh / 2; y++)
-            {
-                for (int x = kw / 2; x < width - kw / 2; x++)
-                {
-                    int maxVal = 0;
-                    for (int ky = -kh / 2; ky <= kh / 2; ky++)
-                        for (int kx = -kw / 2; kx <= kw / 2; kx++)
-                        {
-                            int val = input[x + kx, y + ky];
-                            if (val > maxVal) maxVal = val;
-                        }
-                    dilated[x, y] = maxVal;
-                }
-            }
-
-            // Эрозия
-            for (int y = kh / 2; y < height - kh / 2; y++)
-            {
-                for (int x = kw / 2; x < width - kw / 2; x++)
-                {
-                    int minVal = 255;
-                    for (int ky = -kh / 2; ky <= kh / 2; ky++)
-                        for (int kx = -kw / 2; kx <= kw / 2; kx++)
-                        {
-                            int val = dilated[x + kx, y + ky];
-                            if (val < minVal) minVal = val;
-                        }
-                    result[x, y] = minVal;
-                }
-            }
-
-            // Копирование границ
-            for (int y = 0; y < height; y++)
-                for (int x = 0; x < width; x++)
-                    if (y < kh / 2 || y >= height - kh / 2 || x < kw / 2 || x >= width - kw / 2)
-                        result[x, y] = input[x, y];
-
-            SaveArrayAsImage(result, "5.6_closed_large.png");
-            return result;
-        }
         private Rectangle[] FindContours(int[,] binary)
         {
             int width = binary.GetLength(0);
             int height = binary.GetLength(1);
-
-            // Коррекция поворота
-            //var (angle, confidence) = EstimateRotationAngle(binary);
-            //if (confidence > 0.5 && Math.Abs(angle) > 5)
-            //{
-            //    binary = RotateImage(binary, width, height, angle);
-            //    SaveArrayAsImage(binary, "5.7_rotated.png");
-            //}
-
-            // Морфологическое закрытие для устранения разрывов
-            binary = MorphologicalClosingLargeKernel(binary);
-
             bool[,] visited = new bool[width, height];
             var rectangles = new List<Rectangle>();
 
@@ -612,22 +493,17 @@ namespace BarcodeProject.Core
 
                         int w = maxX - minX + 1;
                         int h = maxY - minY + 1;
-                        int minWidth = Math.Max(10, width / 30);
-                        int minHeight = Math.Max(5, height / 60);
+                        int minWidth = width / 20;
+                        int minHeight = height / 40;
                         double fillRatio = whitePixelCount / (double)(w * h);
 
-                        if (w > minWidth && h > minHeight &&
-                            (w / (float)h > 1.5 || h / (float)w > 1.5) &&
-                            fillRatio > 0.2 &&
-                            whitePixelCount > (width * height) / 100)
-                        {
+                        if (w > minWidth && h > minHeight && w / (float)h > 1.5 && fillRatio > 0.3)
                             rectangles.Add(new Rectangle(minX, minY, w, h));
-                        }
                     }
                 }
             }
 
-            var mergedRectangles = MergeCloseRectangles(rectangles, binary, width / 10, height / 30);
+            var mergedRectangles = MergeCloseRectangles(rectangles, binary, width / 20, height / 20);
             SaveContoursImage(binary, mergedRectangles, "6_contours.png");
             return mergedRectangles.ToArray();
         }
@@ -791,6 +667,7 @@ namespace BarcodeProject.Core
             return _barcodeRegion;
         }
 
+     
         public Bitmap HighlightBarcode()
         {
             using (Bitmap result = new Bitmap(_image))
