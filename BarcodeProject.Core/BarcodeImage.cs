@@ -372,9 +372,18 @@ namespace BarcodeProject.Core
                 for (int x = 0; x < width; x++)
                     histogram[input[x, y]]++;
 
+            // Сглаживание гистограммы
+            int[] smoothedHistogram = new int[256];
+            for (int i = 1; i < 254; i++)
+                smoothedHistogram[i] = (histogram[i - 1] + histogram[i] + histogram[i + 1]) / 3;
+            smoothedHistogram[0] = histogram[0];
+            smoothedHistogram[255] = histogram[255];
+
             float sum = 0;
             for (int i = 0; i < 256; i++)
+            {
                 sum += i * histogram[i];
+            }
             float sumB = 0;
             int wB = 0, wF = 0;
             float maxVariance = 0;
@@ -382,11 +391,11 @@ namespace BarcodeProject.Core
 
             for (int t = 0; t < 256; t++)
             {
-                wB += histogram[t];
+                wB += smoothedHistogram[t];
                 if (wB == 0) continue;
                 wF = totalPixels - wB;
                 if (wF == 0) break;
-                sumB += t * histogram[t];
+                sumB += t * smoothedHistogram[t];
                 float mB = sumB / wB;
                 float mF = (sum - sumB) / wF;
                 float variance = wB * wF * (mB - mF) * (mB - mF);
@@ -399,7 +408,56 @@ namespace BarcodeProject.Core
 
             return threshold;
         }
+        private int[,] MorphologicalOpening(int[,] input, int kernelWidth = 3, int kernelHeight = 3)
+        {
+            int width = input.GetLength(0);
+            int height = input.GetLength(1);
+            int[,] eroded = new int[width, height];
+            int[,] result = new int[width, height];
+            int halfKw = kernelWidth / 2;
+            int halfKh = kernelHeight / 2;
 
+            // Эрозия
+            for (int y = halfKh; y < height - halfKh; y++)
+            {
+                for (int x = halfKw; x < width - halfKw; x++)
+                {
+                    int minVal = 255;
+                    for (int ky = -halfKh; ky <= halfKh; ky++)
+                        for (int kx = -halfKw; kx <= halfKw; kx++)
+                        {
+                            int val = input[x + kx, y + ky];
+                            if (val < minVal) minVal = val;
+                        }
+                    eroded[x, y] = minVal;
+                }
+            }
+
+            // Дилатация
+            for (int y = halfKh; y < height - halfKh; y++)
+            {
+                for (int x = halfKw; x < width - halfKw; x++)
+                {
+                    int maxVal = 0;
+                    for (int ky = -halfKh; ky <= halfKh; ky++)
+                        for (int kx = -halfKw; kx <= halfKw; kx++)
+                        {
+                            int val = eroded[x + kx, y + ky];
+                            if (val > maxVal) maxVal = val;
+                        }
+                    result[x, y] = maxVal;
+                }
+            }
+
+            // Копирование границ
+            for (int y = 0; y < height; y++)
+                for (int x = 0; x < width; x++)
+                    if (y < halfKh || y >= height - halfKh || x < halfKw || x >= width - halfKw)
+                        result[x, y] = input[x, y];
+
+            SaveArrayAsImage(result, "5.5_morph_opening.png");
+            return result;
+        }
         private int[,] AdaptiveThreshold(int[,] input)
         {
             int width = input.GetLength(0);
@@ -444,8 +502,8 @@ namespace BarcodeProject.Core
                     result[x, y] = input[x, y] > blendedThreshold ? 255 : 0;
                 }
             }
-
-            SaveArrayAsImage(result, "5_threshold_improved.png");
+            result = MorphologicalOpening(result, kernelWidth: 3, kernelHeight: 3); // Добавить открытие
+           SaveArrayAsImage(result, "5_threshold_improved.png");
             return result;
         }
 
@@ -777,39 +835,62 @@ namespace BarcodeProject.Core
                 }
                 SaveArrayAsImage(binary, "7.6_binary_region.png");
 
-                // Шаг 5: Извлечение профиля из нескольких строк
-                List<int[]> profiles = new List<int[]>();
-                int numScans = Math.Min(5, height);
-                if (numScans == 0) numScans = 1;
-                for (int scan = 0; scan < numScans; scan++)
+            // Эрозия: восстанавливаем пробелы
+            for (int y = 0; y < height; y++)
+            {
+                for (int x = 0; x < width; x++)
                 {
-                    int y = height / (numScans + 1) * (scan + 1);
-                    if (y >= height) y = height - 1;
-                    int[] profile = new int[width];
-                    for (int x = 0; x < width; x++)
+                    if (y < kernelHeight / 2 || y >= height - kernelHeight / 2 ||
+                        x < kernelWidth / 2 || x >= width - kernelWidth / 2)
                     {
-                        profile[x] = binary[x, y] == 255 ? 0 : 1;
+                        result[x, y] = dilated[x, y]; // Копируем границы
+                        continue;
                     }
-                    profiles.Add(profile);
+
+                    int maxVal = 0;
+                    for (int ky = -kernelHeight / 2; ky <= kernelHeight / 2; ky++)
+                        for (int kx = -kernelWidth / 2; kx <= kernelWidth / 2; kx++)
+                            maxVal = Math.Max(maxVal, dilated[x + kx, y + ky]);
+                    result[x, y] = maxVal;
                 }
-
-                // Шаг 6: Выбор лучшего профиля
-                int[] bestProfile = SelectBestProfile(profiles);
-                SaveProfileAsImage(bestProfile, "8_profile.png");
-
-
-                return bestProfile;
             }
-            catch (IndexOutOfRangeException ex)
-            {
-                Console.WriteLine($"Index error in GetProfileFromRegion: {ex.Message}");
-                throw;
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Unexpected error in GetProfileFromRegion: {ex.Message}");
-                throw;
-            }
+
+            return result;
+        }
+
+        private int[,] ExtractROI(int[,] input, Rectangle region)
+        {
+            int[,] roi = new int[region.Width, region.Height];
+            for (int y = 0; y < region.Height; y++)
+                for (int x = 0; x < region.Width; x++)
+                    roi[x, y] = input[region.X + x, region.Y + y];
+            return roi;
+        }
+
+        private int[,] EnhanceContrast(int[,] input, int width, int height)
+        {
+            int[,] output = new int[width, height];
+            int[] histogram = new int[256];
+            for (int y = 0; y < height; y++)
+                for (int x = 0; x < width; x++)
+                    histogram[input[x, y]]++;
+
+            int[] cdf = new int[256];
+            cdf[0] = histogram[0];
+            for (int i = 1; i < 256; i++)
+                cdf[i] = cdf[i - 1] + histogram[i];
+
+            int cdfMin = cdf.FirstOrDefault(v => v > 0);
+            int totalPixels = width * height;
+
+            for (int y = 0; y < height; y++)
+                for (int x = 0; x < width; x++)
+                {
+                    int value = input[x, y];
+                    int newValue = (int)((cdf[value] - cdfMin) * 255f / (totalPixels - cdfMin));
+                    output[x, y] = Math.Max(0, Math.Min(255, newValue));
+                }
+            return output;
         }
 
        
