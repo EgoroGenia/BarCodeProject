@@ -10,8 +10,10 @@ namespace BarcodeProject.Core
         public static int[] Binarize(int[] profile)
         {
             if (profile == null || profile.Length == 0) return new int[0];
-            // Пропускаем бинаризацию, если профиль уже бинарный
             if (profile.All(x => x == 0 || x == 1)) return profile;
+
+            // Глобальный порог по методу Отсу
+            double globalThreshold = CalculateOtsuThreshold(profile);
 
             int windowSize = Math.Max(11, profile.Length / 20);
             if (windowSize % 2 == 0) windowSize++;
@@ -29,11 +31,55 @@ namespace BarcodeProject.Core
                 double mean = window.Average();
                 double sumSquared = window.Sum(v => (v - mean) * (v - mean));
                 double stdDev = Math.Sqrt(sumSquared / window.Length);
-                double threshold = mean - 0.5 * stdDev;
+                double localThreshold = mean - 0.5 * stdDev;
+
+                // Комбинируем глобальный и локальный порог
+                double threshold = (globalThreshold + localThreshold) / 2.0;
                 binary[i] = profile[i] <= threshold ? 1 : 0; // 1 = штрих, 0 = пробел
             }
 
             return binary;
+        }
+
+        private static double CalculateOtsuThreshold(int[] profile)
+        {
+            int[] histogram = new int[256];
+            foreach (var value in profile)
+            {
+                if (value >= 0 && value < 256) histogram[value]++;
+            }
+
+            int total = profile.Length;
+            double sum = 0;
+            for (int i = 0; i < 256; i++)
+                sum += i * histogram[i];
+
+            double sumB = 0;
+            int wB = 0;
+            int wF = 0;
+            double maxVariance = 0;
+            int threshold = 0;
+
+            for (int t = 0; t < 256; t++)
+            {
+                wB += histogram[t];
+                if (wB == 0) continue;
+                wF = total - wB;
+                if (wF == 0) break;
+
+                sumB += t * histogram[t];
+                double mB = sumB / wB;
+                double mF = (sum - sumB) / wF;
+                double variance = wB * wF * (mB - mF) * (mB - mF);
+
+                if (variance > maxVariance)
+                {
+                    maxVariance = variance;
+                    threshold = t;
+                }
+            }
+
+            return threshold;
         }
 
         public static List<(int value, int length)> RLE(int[] binary)
@@ -76,33 +122,32 @@ namespace BarcodeProject.Core
             trimmedRle = trimmedRle.Skip(startIndex).ToList();
 
             // Шаг 3: Оценка moduleSize
-            var lengths = trimmedRle.Select(item => item.length).Where(l => l > 0).ToList();
-            if (lengths.Count == 0) return ("", false);
-
-            double moduleSize = lengths.Median();
-            if (barcodeType == "EAN-13" && trimmedRle.Count >= 3)
-            {
-                var startGuardRle = trimmedRle.Take(3).ToList(); // "101" = 3 модуля
-                double guardModuleSize = startGuardRle.Sum(item => item.length) / 3.0;
-                moduleSize = (moduleSize + guardModuleSize) / 2.0; // Среднее для устойчивости
-            }
-            else if (barcodeType == "Code128" && trimmedRle.Count >= 4)
-            {
-                var startGuardRle = trimmedRle.Take(4).ToList();
-                double guardModuleSize = startGuardRle.Sum(item => item.length) / 11.0; // 11 модулей
-                moduleSize = (moduleSize + guardModuleSize) / 2.0;
-            }
+            double moduleSize = EstimateModuleSize(trimmedRle, barcodeType);
             if (moduleSize < 1) moduleSize = 1;
 
             // Шаг 4: Объединяем короткие последовательности
             var cleanedRle = new List<(int value, int length)>();
             int currentValue = trimmedRle[0].value;
             int currentLength = trimmedRle[0].length;
+            double minLengthThreshold = moduleSize * 0.5; // Динамический порог
             for (int i = 1; i < trimmedRle.Count; i++)
             {
-                if (i > 0 && i < trimmedRle.Count - 1 && trimmedRle[i].length < 0.3 * moduleSize && trimmedRle[i].value != currentValue)
+                if (i > 0 && i < trimmedRle.Count - 1 &&
+                    trimmedRle[i].length < minLengthThreshold &&
+                    trimmedRle[i].value != currentValue)
                 {
-                    currentLength += trimmedRle[i].length;
+                    if (i > 1 && i < trimmedRle.Count - 2 &&
+                        trimmedRle[i - 1].length >= minLengthThreshold &&
+                        trimmedRle[i + 1].length >= minLengthThreshold)
+                    {
+                        currentLength += trimmedRle[i].length;
+                    }
+                    else
+                    {
+                        cleanedRle.Add((currentValue, currentLength));
+                        currentValue = trimmedRle[i].value;
+                        currentLength = trimmedRle[i].length;
+                    }
                 }
                 else
                 {
@@ -131,9 +176,111 @@ namespace BarcodeProject.Core
                 bitString = new string(bitString.Reverse().ToArray());
             }
 
-            // Шаг 6: Проверка валидности
-            bool isValid = barcodeType == "EAN-13" ? totalModules >= 90 && totalModules <= 100 : totalModules >= 33;
+            // Шаг 6: Корректировка длины битовой строки
+            int expectedLength = barcodeType == "EAN-13" ? 95 : 33; // Минимальная длина для Code 128
+            if (bitString.Length != expectedLength && totalModules >= expectedLength * 0.9 && totalModules <= expectedLength * 1.1)
+            {
+                // Пересчитываем moduleSize для соответствия ожидаемой длине
+                moduleSize *= ((double)expectedLength / totalModules);
+                bitString = "";
+                totalModules = 0;
+                cleanedRle.Clear();
+                currentValue = trimmedRle[0].value;
+                currentLength = trimmedRle[0].length;
+                for (int i = 1; i < trimmedRle.Count; i++)
+                {
+                    if (i > 0 && i < trimmedRle.Count - 1 &&
+                        trimmedRle[i].length < minLengthThreshold &&
+                        trimmedRle[i].value != currentValue)
+                    {
+                        if (i > 1 && i < trimmedRle.Count - 2 &&
+                            trimmedRle[i - 1].length >= minLengthThreshold &&
+                            trimmedRle[i + 1].length >= minLengthThreshold)
+                        {
+                            currentLength += trimmedRle[i].length;
+                        }
+                        else
+                        {
+                            cleanedRle.Add((currentValue, currentLength));
+                            currentValue = trimmedRle[i].value;
+                            currentLength = trimmedRle[i].length;
+                        }
+                    }
+                    else
+                    {
+                        cleanedRle.Add((currentValue, currentLength));
+                        currentValue = trimmedRle[i].value;
+                        currentLength = trimmedRle[i].length;
+                    }
+                }
+                cleanedRle.Add((currentValue, currentLength));
+
+                foreach (var item in cleanedRle)
+                {
+                    double normalized = item.length / moduleSize;
+                    int modules = (int)Math.Round(normalized);
+                    if (modules < 1) modules = 1;
+                    totalModules += modules;
+                    string value = item.value == 1 ? "1" : "0";
+                    bitString += string.Join("", Enumerable.Repeat(value, modules));
+                }
+
+                if (isReversed)
+                {
+                    bitString = new string(bitString.Reverse().ToArray());
+                }
+            }
+
+            // Шаг 7: Проверка валидности
+            bool isValid = barcodeType == "EAN-13" ? bitString.Length == 95 : totalModules >= 33;
             return (bitString, isValid);
+        }
+
+        private static double EstimateModuleSize(List<(int value, int length)> rle, string barcodeType)
+        {
+            var lengths = rle.Select(item => item.length).Where(l => l > 0).ToList();
+            if (lengths.Count == 0) return 1.0;
+
+            // Начальная оценка на основе стартового узора
+            double guardModuleSize = 0;
+            if (barcodeType == "EAN-13" && rle.Count >= 3)
+            {
+                guardModuleSize = rle.Take(3).Sum(item => item.length) / 3.0; // "101" = 3 модуля
+            }
+            else if (barcodeType == "Code128" && rle.Count >= 4)
+            {
+                guardModuleSize = rle.Take(4).Sum(item => item.length) / 11.0; // 11 модулей
+            }
+
+            // Кластеризация длин
+            var sortedLengths = lengths.OrderBy(l => l).ToList();
+            var clusters = new List<double>();
+            double currentSum = sortedLengths[0];
+            int count = 1;
+            for (int i = 1; i < sortedLengths.Count; i++)
+            {
+                if (sortedLengths[i] < currentSum / count * 1.5) // Объединяем близкие длины
+                {
+                    currentSum += sortedLengths[i];
+                    count++;
+                }
+                else
+                {
+                    clusters.Add(currentSum / count);
+                    currentSum = sortedLengths[i];
+                    count = 1;
+                }
+            }
+            clusters.Add(currentSum / count);
+
+            // Выбираем минимальный кластер как ширину одного модуля
+            double moduleSize = clusters.Where(c => c > 0).Min();
+            if (guardModuleSize > 0)
+            {
+                moduleSize = (moduleSize + guardModuleSize) / 2.0; // Усредняем с узором
+            }
+
+            return Math.Max(1.0, moduleSize);
         }
 
         public static List<(int value, int length)> TrimWhitespace(List<(int value, int length)> rle)
@@ -234,27 +381,21 @@ namespace BarcodeProject.Core
             return normalized;
         }
 
-        public static int[] FilterNoise(int[] profile, int threshold = 10)
+        public static int[] FilterNoise(int[] profile, int windowSize = 5)
         {
             if (profile == null || profile.Length == 0) return profile;
 
-            // Гауссов фильтр с ядром [1, 2, 1]
             int[] filtered = new int[profile.Length];
-            filtered[0] = profile[0];
-            filtered[profile.Length - 1] = profile[profile.Length - 1];
-            for (int i = 1; i < profile.Length - 1; i++)
+            for (int i = 0; i < profile.Length; i++)
             {
-                filtered[i] = (profile[i - 1] + 2 * profile[i] + profile[i + 1]) / 4;
-            }
-
-            // Дополнительная фильтрация по порогу
-            for (int i = 1; i < profile.Length - 1; i++)
-            {
-                if (Math.Abs(filtered[i] - filtered[i - 1]) < threshold &&
-                    Math.Abs(filtered[i] - filtered[i + 1]) < threshold)
+                int start = Math.Max(0, i - windowSize / 2);
+                int end = Math.Min(profile.Length, i + windowSize / 2 + 1);
+                int[] window = new int[end - start];
+                for (int j = start, k = 0; j < end; j++, k++)
                 {
-                    filtered[i] = (filtered[i - 1] + filtered[i + 1]) / 2;
+                    window[k] = profile[j];
                 }
+                filtered[i] = (int)window.OrderBy(x => x).Median();
             }
             return filtered;
         }

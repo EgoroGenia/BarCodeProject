@@ -1,0 +1,66 @@
+﻿@{
+    ViewData["Title"] = "Сканер штрихкодов";
+}
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>@ViewData["Title"]</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body>
+    <div class="container mx-auto p-4 max-w-2xl">
+        <h1 class="text-3xl font-bold mb-6 text-center">Сканер штрихкодов</h1>
+        <form method="post" enctype="multipart/form-data">
+            <div class="mb-4">
+                <label class="block text-sm font-medium mb-2" for="barcodeType">Тип штрихкода</label>
+                <select id="barcodeType" name="barcodeType" class="border rounded p-2 w-full">
+                    <option value="EAN-13">EAN-13</option>
+                    <option value="Code 128">Code 128</option>
+                </select>
+            </div>
+            <div class="mb-4">
+                <label class="block text-sm font-medium mb-2" for="image">Загрузить изображение</label>
+                <input type="file" id="image" name="image" accept="image/*" class="border rounded p-2 w-full" />
+            </div>
+            <button type="submit" class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 w-full">
+                Сканировать штрихкод
+            </button>
+        </form>
+        @if (!string.IsNullOrEmpty(ViewData["Error"]?.ToString()))
+        {
+            <p class="text-red-500 mt-4 text-center">@ViewData["Error"]</p>
+        }
+        @if (!string.IsNullOrEmpty(ViewData["Result"]?.ToString()))
+        {
+            <div class="mt-6">
+                @if (!string.IsNullOrEmpty(ViewData["HighlightedImage"]?.ToString()))
+                {
+                    <div class="mb-4">
+                        <h2 class="text-xl font-semibold mb-2">Изображение с выделенным штрихкодом:</h2>
+                        <img src="@ViewData["HighlightedImage"]" alt="Штрихкод с выделением" class="w-full rounded shadow" />
+                    </div>
+                }
+                <div>
+                    <h2 class="text-xl font-semibold mb-2">Результат (цифры):</h2>
+                    <p class="text-2xl font-mono text-center p-4 bg-gray-100 rounded">@ViewData["Result"]</p>
+                </div>
+                @if (ViewData["DebugImages"] != null)
+                {
+                    <div class="mt-6">
+                        <h2 class="text-xl font-semibold mb-2">Отладочные изображения:</h2>
+                        @foreach (var debugImage in (List<(string Name, string Base64Image)>)ViewData["DebugImages"])
+                        {
+                            <div class="mb-4">
+                                <p class="text-sm font-medium">@debugImage.Name</p>
+                                <img src="@debugImage.Base64Image" alt="@debugImage.Name" class="w-full rounded shadow" />
+                            </div>
+                        }
+                    </div>
+                }
+            </div>
+        }
+    </div>
+</body>
+</html>

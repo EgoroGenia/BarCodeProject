@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Imaging;
+using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
@@ -464,6 +465,7 @@ namespace BarcodeProject.Core
                     {
                         int minX = x, maxX = x, minY = y, maxY = y;
                         var stack = new Stack<Point>();
+                        var contourPoints = new List<Point>();
                         stack.Push(new Point(x, y));
                         visited[x, y] = true;
                         int whitePixelCount = 1;
@@ -471,6 +473,7 @@ namespace BarcodeProject.Core
                         while (stack.Count > 0)
                         {
                             var p = stack.Pop();
+                            contourPoints.Add(p);
                             if (p.X < minX) minX = p.X;
                             if (p.X > maxX) maxX = p.X;
                             if (p.Y < minY) minY = p.Y;
@@ -493,21 +496,24 @@ namespace BarcodeProject.Core
 
                         int w = maxX - minX + 1;
                         int h = maxY - minY + 1;
-                        int minWidth = width / 30;  // Ослабленная минимальная ширина
-                        int minHeight = height / 50;  // Ослабленная минимальная высота
-                        double fillRatio = whitePixelCount / (double)(w * h);
+                        int minWidth = width / 30; // Relaxed minimum width
+                        int minHeight = height / 50; // Relaxed minimum height
                         float aspectRatio = w / (float)h;
+                        double fillRatio = whitePixelCount / (double)(w * h);
 
-                        // Ослабленные ограничения: соотношение сторон от 1.0 (более квадратное) до 5.0 (избегаем чрезмерно вытянутых)
-                        if (w > minWidth && h > minHeight && aspectRatio >= 1.0 && aspectRatio <= 5.0 && fillRatio > 0.2)
+                        // Stricter aspect ratio: between 1.5 and 5.0
+                        // Lower fill ratio threshold to 0.2 for irregular shapes
+                        if (w > minWidth && h > minHeight && aspectRatio > 1.1 && aspectRatio < 5.0 && fillRatio > 0.2)
                         {
-                            rectangles.Add(new Rectangle(minX, minY, w, h));
+                            // Optional: Contour approximation to check for quadrilateral
+                            if (IsQuadrilateral(contourPoints))
+                                rectangles.Add(new Rectangle(minX, minY, w, h));
                         }
                     }
                 }
             }
 
-            var mergedRectangles = MergeCloseRectangles(rectangles, binary, width / 15, height / 15);
+            var mergedRectangles = MergeCloseRectangles(rectangles, binary, width / 30, height / 30);
             SaveContoursImage(binary, mergedRectangles, "6_contours.png");
             return mergedRectangles.ToArray();
         }
@@ -563,13 +569,24 @@ namespace BarcodeProject.Core
 
                 int w = maxX - minX + 1;
                 int h = maxY - minY + 1;
+                float aspectRatio = w / (float)h;
                 double newFillRatio = whitePixelCount / (double)(w * h);
 
-                if (w / (float)h > 1.5 && newFillRatio > 0.3)
+                // Apply stricter aspect ratio and fill ratio checks after merging
+                if (aspectRatio > 1.1 && aspectRatio < 5.0 && newFillRatio > 0.2)
                     merged.Add(new Rectangle(minX, minY, w, h));
             }
 
             return merged;
+        }
+
+        // Simple quadrilateral check (placeholder implementation)
+        private bool IsQuadrilateral(List<Point> contourPoints)
+        {
+            // Placeholder: Implement Douglas-Peucker or other contour approximation
+            // to check if the contour resembles a quadrilateral (e.g., 4 dominant vertices).
+            // For now, return true to use the bounding box approach.
+            return true;
         }
 
         private void SaveContoursImage(int[,] binary, List<Rectangle> rectangles, string filename)
@@ -897,135 +914,6 @@ namespace BarcodeProject.Core
             return output;
         }
 
-        private (double angle, double confidence) EstimateRotationAngle(int[,] binary)
-        {
-            int width = binary.GetLength(0);
-            int height = binary.GetLength(1);
-
-            // Применяем Canny для выделения краев
-            int[,] edges = CannyEdgeDetection(binary, sigma: 1.0, lowThreshold: 50, highThreshold: 100);
-            SaveArrayAsImage(edges, "7_edges_for_rotation.png");
-
-            // Применяем Hough Transform
-            var houghResult = HoughTransform(edges, width, height);
-            if (!houghResult.HasValue)
-            {
-                Console.WriteLine("Hough Transform failed to detect lines.");
-                return (0, 0);
-            }
-
-            var (angles, votes) = houghResult.Value;
-            if (angles.Count == 0)
-            {
-                Console.WriteLine("No valid angles detected.");
-                return (0, 0);
-            }
-
-            // Вычисляем средневзвешенный угол
-            double totalAngle = 0;
-            int totalVotes = 0;
-            for (int i = 0; i < angles.Count; i++)
-            {
-                totalAngle += angles[i] * votes[i];
-                totalVotes += votes[i];
-            }
-            double avgAngle = totalAngle / totalVotes;
-
-            // Корректируем угол относительно вертикали
-            double angle = avgAngle - 90;
-            if (angle > 90) angle -= 180;
-            if (angle < -90) angle += 180;
-
-            // Оцениваем уверенность
-            double maxPossibleVotes = Math.Sqrt(width * width + height * height) * 10; // Примерная оценка
-            double confidence = Math.Min(1.0, totalVotes / maxPossibleVotes);
-
-            Console.WriteLine($"Top angles: {string.Join(", ", angles.Select(a => a.ToString("F2")))}");
-            Console.WriteLine($"Votes: {string.Join(", ", votes)}");
-            return (angle, confidence);
-        }
-
-        private (List<double> angles, List<int> votes)? HoughTransform(int[,] binary, int width, int height)
-        {
-            int maxRho = (int)Math.Sqrt(width * width + height * height);
-            int rhoBins = maxRho * 2;
-            int thetaBins = 180;
-            int[,] accumulator = new int[rhoBins, thetaBins];
-            int minVotes = Math.Max(10, Math.Min(width, height) / 15);
-
-            // Заполняем аккумулятор
-            for (int y = 0; y < height; y++)
-                for (int x = 0; x < width; x++)
-                    if (binary[x, y] == 255)
-                        for (int t = 0; t < thetaBins; t++)
-                        {
-                            double theta = t * Math.PI / 180;
-                            double rho = x * Math.Cos(theta) + y * Math.Sin(theta);
-                            int rhoIndex = (int)(rho + maxRho);
-                            if (rhoIndex >= 0 && rhoIndex < rhoBins)
-                                accumulator[rhoIndex, t]++;
-                        }
-
-            // Собираем топ-5 углов
-            var topCandidates = new List<(int theta, int votes)>();
-            for (int t = 0; t < thetaBins; t++)
-                for (int r = 0; r < rhoBins; r++)
-                    if (accumulator[r, t] >= minVotes)
-                        topCandidates.Add((t, accumulator[r, t]));
-
-            if (topCandidates.Count == 0)
-                return null;
-
-            topCandidates.Sort((a, b) => b.votes.CompareTo(a.votes));
-            var selected = topCandidates.Take(5).ToList();
-
-            var angles = new List<double>();
-            var votes = new List<int>();
-            foreach (var (theta, vote) in selected)
-            {
-                angles.Add(theta * 180.0 / Math.PI);
-                votes.Add(vote);
-            }
-
-            return (angles, votes);
-        }
-
-        private int[,] RotateImage(int[,] input, int width, int height, double angle)
-        {
-            int[,] result = new int[width, height];
-            double rad = angle * Math.PI / 180;
-            double cos = Math.Cos(rad), sin = Math.Sin(rad);
-            int cx = width / 2, cy = height / 2;
-
-            for (int y = 0; y < height; y++)
-                for (int x = 0; x < width; x++)
-                {
-                    double srcX = (x - cx) * cos + (y - cy) * sin + cx;
-                    double srcY = -(x - cx) * sin + (y - cy) * cos + cy;
-
-                    int x0 = (int)Math.Floor(srcX);
-                    int y0 = (int)Math.Floor(srcY);
-                    double dx = srcX - x0;
-                    double dy = srcY - y0;
-
-                    if (x0 >= 0 && x0 < width - 1 && y0 >= 0 && y0 < height - 1)
-                    {
-                        // Билинейная интерполяция
-                        int v00 = input[x0, y0];
-                        int v10 = input[x0 + 1, y0];
-                        int v01 = input[x0, y0 + 1];
-                        int v11 = input[x0 + 1, y0 + 1];
-                        double value = (1 - dx) * (1 - dy) * v00 +
-                                       dx * (1 - dy) * v10 +
-                                       (1 - dx) * dy * v01 +
-                                       dx * dy * v11;
-                        result[x, y] = (int)Math.Round(value);
-                    }
-                    else
-                        result[x, y] = 255;
-                }
-            return result;
-        }
 
         private int[] SelectBestProfile(List<int[]> profiles)
         {
@@ -1068,6 +956,16 @@ namespace BarcodeProject.Core
                 {
                     Console.WriteLine($"Error saving {filename}: {ex.Message}");
                 }
+            }
+        }
+        // Вспомогательный метод для конвертации Bitmap в base64
+        public static string BitmapToBase64(Bitmap bitmap)
+        {
+            using (var stream = new MemoryStream())
+            {
+                bitmap.Save(stream, ImageFormat.Png);
+                var bytes = stream.ToArray();
+                return Convert.ToBase64String(bytes);
             }
         }
     }
