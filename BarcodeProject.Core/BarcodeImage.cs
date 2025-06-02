@@ -661,9 +661,8 @@ namespace BarcodeProject.Core
 
             int[,] edges = CannyEdgeDetection(isLowContrast ? enhanced : _grayImage, sigma: 1.5, lowThreshold: 50, highThreshold: 100);
             int[,] closed = MorphologicalClosing(edges);
-            int[,] thresh = AdaptiveThreshold(closed);
 
-            var contours = FindContours(thresh);
+            var contours = FindContours(closed);
 
             if (contours.Length == 0)
             {
@@ -672,8 +671,7 @@ namespace BarcodeProject.Core
                     int[,] highPass = ApplyHighPassFilter(enhanced);
                     edges = CannyEdgeDetection(highPass, sigma: 1.4, lowThreshold: 50, highThreshold: 100);
                     closed = MorphologicalClosing(edges);
-                    thresh = AdaptiveThreshold(closed);
-                    contours = FindContours(thresh);
+                    contours = FindContours(closed);
                 }
                 _barcodeRegion = Rectangle.Empty;
             }
