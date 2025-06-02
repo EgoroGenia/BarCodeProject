@@ -65,18 +65,14 @@ namespace BarcodeProject.Core
         {
             if (rle == null || rle.Count == 0) return ("", false);
 
-            // Шаг 1: Удаление начальных и конечных белых участков (пробелов, value == 0)
+            // Шаг 1: Удаление начальных и конечных пробелов
             var trimmedRle = TrimWhitespace(rle);
             if (trimmedRle.Count == 0) return ("", false);
 
             // Шаг 2: Поиск стартового узора
             (int startIndex, bool isReversed) = FindStartPattern(trimmedRle, barcodeType);
-            if (startIndex < 0)
-            {
-                return ("", false);
-            }
+            if (startIndex < 0) return ("", false);
 
-            // Обрезаем RLE до начала стартового узора
             trimmedRle = trimmedRle.Skip(startIndex).ToList();
 
             // Шаг 3: Оценка moduleSize
@@ -88,13 +84,13 @@ namespace BarcodeProject.Core
             {
                 var startGuardRle = trimmedRle.Take(3).ToList(); // "101" = 3 модуля
                 double guardModuleSize = startGuardRle.Sum(item => item.length) / 3.0;
-                moduleSize = Math.Max(moduleSize, guardModuleSize);
+                moduleSize = (moduleSize + guardModuleSize) / 2.0; // Среднее для устойчивости
             }
             else if (barcodeType == "Code128" && trimmedRle.Count >= 4)
             {
-                var startGuardRle = trimmedRle.Take(4).ToList(); // Code 128 start pattern
-                double guardModuleSize = startGuardRle.Sum(item => item.length) / 4.0;
-                moduleSize = Math.Max(moduleSize, guardModuleSize);
+                var startGuardRle = trimmedRle.Take(4).ToList();
+                double guardModuleSize = startGuardRle.Sum(item => item.length) / 11.0; // 11 модулей
+                moduleSize = (moduleSize + guardModuleSize) / 2.0;
             }
             if (moduleSize < 1) moduleSize = 1;
 
@@ -117,32 +113,26 @@ namespace BarcodeProject.Core
             }
             cleanedRle.Add((currentValue, currentLength));
 
-            // Шаг 5: Нормализация и формирование битовой строки
+            // Шаг 5: Формирование битовой строки
             string bitString = "";
             int totalModules = 0;
             foreach (var item in cleanedRle)
             {
                 double normalized = item.length / moduleSize;
-                int modules;
-                if (normalized >= 0.5 && normalized <= 1.5) modules = 1;
-                else if (normalized >= 1.5 && normalized <= 2.5) modules = 2;
-                else if (normalized >= 2.5 && normalized <= 3.5) modules = 3;
-                else if (normalized >= 3.5 && normalized <= 4.5) modules = 4;
-                else modules = (int)Math.Round(normalized);
+                int modules = (int)Math.Round(normalized);
                 if (modules < 1) modules = 1;
                 totalModules += modules;
-                string value = item.value == 1 ? "1" : "0"; // 1 = штрих (чёрный), 0 = пробел (белый)
+                string value = item.value == 1 ? "1" : "0";
                 bitString += string.Join("", Enumerable.Repeat(value, modules));
             }
 
-            // Если штрих-код перевёрнут, инвертируем битовую строку
             if (isReversed)
             {
                 bitString = new string(bitString.Reverse().ToArray());
             }
 
             // Шаг 6: Проверка валидности
-            bool isValid = barcodeType == "EAN-13" ? totalModules == 95 : totalModules >= 35;
+            bool isValid = barcodeType == "EAN-13" ? totalModules >= 90 && totalModules <= 100 : totalModules >= 33;
             return (bitString, isValid);
         }
 
@@ -248,13 +238,22 @@ namespace BarcodeProject.Core
         {
             if (profile == null || profile.Length == 0) return profile;
 
-            int[] filtered = (int[])profile.Clone();
+            // Гауссов фильтр с ядром [1, 2, 1]
+            int[] filtered = new int[profile.Length];
+            filtered[0] = profile[0];
+            filtered[profile.Length - 1] = profile[profile.Length - 1];
             for (int i = 1; i < profile.Length - 1; i++)
             {
-                if (Math.Abs(profile[i] - profile[i - 1]) < threshold &&
-                    Math.Abs(profile[i] - profile[i + 1]) < threshold)
+                filtered[i] = (profile[i - 1] + 2 * profile[i] + profile[i + 1]) / 4;
+            }
+
+            // Дополнительная фильтрация по порогу
+            for (int i = 1; i < profile.Length - 1; i++)
+            {
+                if (Math.Abs(filtered[i] - filtered[i - 1]) < threshold &&
+                    Math.Abs(filtered[i] - filtered[i + 1]) < threshold)
                 {
-                    filtered[i] = (profile[i - 1] + profile[i + 1]) / 2;
+                    filtered[i] = (filtered[i - 1] + filtered[i + 1]) / 2;
                 }
             }
             return filtered;

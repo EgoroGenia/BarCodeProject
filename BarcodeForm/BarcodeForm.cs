@@ -99,12 +99,21 @@ namespace BarcodeDecoderWinForms
                 int[] profile = _barcodeImage.GetProfileFromRegion(_barcodeRegion);
                 var binary = Utils.Binarize(profile);
                 var rle = Utils.RLE(binary);
-                var trimmedRle = Utils.TrimWhitespace(rle); // Получаем обрезанный RLE
+                var trimmedRle = Utils.TrimWhitespace(rle);
                 var (bitString, isValid) = Utils.ConvertToBitString(rle, "EAN-13");
                 string result = BarcodeAnalyzer.AnalyzeBarcode(profile, "EAN-13");
 
                 try
                 {
+                    // Вычисляем moduleSize для отладки
+                    double moduleSize = trimmedRle.Any() ? trimmedRle.Select(item => item.length).Where(l => l > 0).Median() : 0;
+                    if (trimmedRle.Count >= 3) // Проверка для EAN-13
+                    {
+                        var startGuardRle = trimmedRle.Take(3).ToList();
+                        double guardModuleSize = startGuardRle.Sum(item => item.length) / 3.0;
+                        moduleSize = (moduleSize + guardModuleSize) / 2.0;
+                    }
+
                     // Сохраняем отладочные данные
                     File.WriteAllText("binary_profile.txt", bitString);
                     File.WriteAllText("rle_debug.txt", string.Join(", ", rle.Select(item => $"({item.value}, {item.length})")));
@@ -114,19 +123,19 @@ namespace BarcodeDecoderWinForms
                     File.WriteAllText("debug_log.txt",
                         $"Длина профиля: {profile.Length}\r\n" +
                         $"Длина битовой строки: {bitString.Length}\r\n" +
-                        $"Первые 20 символов битовой строки: {bitString.Substring(0, Math.Min(20, bitString.Length))}\r\n" +
+                        $"Первые 20 символов битовой строки: {(bitString.Length > 0 ? bitString.Substring(0, Math.Min(20, bitString.Length)) : "Пустая строка")}\r\n" +
                         $"Валидность: {isValid}\r\n" +
-                        $"ModuleSize: {CalculateModuleSize(trimmedRle, "EAN-13")}\r\n" +
-                        $"Общее количество модулей: {CalculateTotalModules(trimmedRle, "EAN-13")}"
-                    );
+                        $"ModuleSize: {moduleSize:F2}\r\n" +
+                        $"Общее количество модулей: {bitString.Length}");
 
                     rtbResult.AppendText($"\r\nБинарный профиль сохранён в binary_profile.txt");
                     rtbResult.AppendText($"\r\nRLE сохранён в rle_debug.txt");
                     rtbResult.AppendText($"\r\nОбрезанный RLE сохранён в rle_trimmed.txt");
                     rtbResult.AppendText($"\r\nДлина профиля: {profile.Length}");
                     rtbResult.AppendText($"\r\nДлина битовой строки: {bitString.Length}");
-                    rtbResult.AppendText($"\r\nПервые 20 символов битовой строки: {bitString.Substring(0, Math.Min(20, bitString.Length))}");
+                    rtbResult.AppendText($"\r\nПервые 20 символов битовой строки: {(bitString.Length > 0 ? bitString.Substring(0, Math.Min(20, bitString.Length)) : "Пустая строка")}");
                     rtbResult.AppendText($"\r\nВалидность: {isValid}");
+                    rtbResult.AppendText($"\r\nModuleSize: {moduleSize:F2}");
                 }
                 catch (Exception ex)
                 {
