@@ -505,9 +505,7 @@ namespace BarcodeProject.Core
                         // Lower fill ratio threshold to 0.2 for irregular shapes
                         if (w > minWidth && h > minHeight && aspectRatio > 1.1 && aspectRatio < 5.0 && fillRatio > 0.2)
                         {
-                            // Optional: Contour approximation to check for quadrilateral
-                            if (IsQuadrilateral(contourPoints))
-                                rectangles.Add(new Rectangle(minX, minY, w, h));
+                           rectangles.Add(new Rectangle(minX, minY, w, h));
                         }
                     }
                 }
@@ -579,16 +577,7 @@ namespace BarcodeProject.Core
 
             return merged;
         }
-
-        // Simple quadrilateral check (placeholder implementation)
-        private bool IsQuadrilateral(List<Point> contourPoints)
-        {
-            // Placeholder: Implement Douglas-Peucker or other contour approximation
-            // to check if the contour resembles a quadrilateral (e.g., 4 dominant vertices).
-            // For now, return true to use the bounding box approach.
-            return true;
-        }
-
+                
         private void SaveContoursImage(int[,] binary, List<Rectangle> rectangles, string filename)
         {
             int width = binary.GetLength(0);
