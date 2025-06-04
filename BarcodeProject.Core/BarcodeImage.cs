@@ -320,8 +320,8 @@ namespace BarcodeProject.Core
             int[,] dilated = new int[width, height];
             int[,] result = new int[width, height];
 
-            int kw = Math.Max(7, width / 50);
-            int kh = Math.Max(3, height / 100);
+            int kw = Math.Max(15, width / 40);
+            int kh = Math.Max(5, height / 80);
 
             for (int y = kh / 2; y < height - kh / 2; y++)
             {
@@ -400,56 +400,7 @@ namespace BarcodeProject.Core
 
             return threshold;
         }
-
-        private int[,] AdaptiveThreshold(int[,] input)
-        {
-            int width = input.GetLength(0);
-            int height = input.GetLength(1);
-            int[,] result = new int[width, height];
-
-            int otsuThreshold = ComputeOtsuThreshold(input);
-
-            int windowSize = Math.Max(15, Math.Min(width, height) / 15);
-            if (windowSize % 2 == 0) windowSize++;
-            double k = 0.15, r = 128;
-            double minThreshold = otsuThreshold * 0.7;
-
-            for (int y = 0; y < height; y++)
-            {
-                for (int x = 0; x < width; x++)
-                {
-                    int x1 = Math.Max(0, x - windowSize / 2);
-                    int y1 = Math.Max(0, y - windowSize / 2);
-                    int x2 = Math.Min(width - 1, x + windowSize / 2);
-                    int y2 = Math.Min(height - 1, y + windowSize / 2);
-
-                    double sum = 0, sumSq = 0;
-                    int count = 0;
-                    for (int j = y1; j <= y2; j++)
-                        for (int i = x1; i <= x2; i++)
-                        {
-                            int pixel = input[i, j];
-                            sum += pixel;
-                            sumSq += pixel * pixel;
-                            count++;
-                        }
-
-                    double mean = sum / count;
-                    double variance = (sumSq - sum * sum / count) / count;
-                    double stdDev = Math.Sqrt(variance);
-
-                    double sauvolaThreshold = mean * (1 + k * (stdDev / r - 1));
-                    double blendedThreshold = 0.6 * sauvolaThreshold + 0.4 * otsuThreshold;
-                    blendedThreshold = Math.Max(minThreshold, blendedThreshold);
-
-                    result[x, y] = input[x, y] > blendedThreshold ? 255 : 0;
-                }
-            }
-
-            SaveArrayAsImage(result, "5_threshold_improved.png");
-            return result;
-        }
-
+                
         private Rectangle[] FindContours(int[,] binary)
         {
             int width = binary.GetLength(0);
@@ -503,7 +454,7 @@ namespace BarcodeProject.Core
 
                         // Stricter aspect ratio: between 1.5 and 5.0
                         // Lower fill ratio threshold to 0.2 for irregular shapes
-                        if (w > minWidth && h > minHeight && aspectRatio > 1.1 && aspectRatio < 5.0 && fillRatio > 0.2)
+                        if (w > minWidth && h > minHeight && aspectRatio > 1.1 && aspectRatio <10.0 && fillRatio > 0.2)
                         {
                            rectangles.Add(new Rectangle(minX, minY, w, h));
                         }
@@ -571,7 +522,7 @@ namespace BarcodeProject.Core
                 double newFillRatio = whitePixelCount / (double)(w * h);
 
                 // Apply stricter aspect ratio and fill ratio checks after merging
-                if (aspectRatio > 1.1 && aspectRatio < 5.0 && newFillRatio > 0.2)
+                if (aspectRatio > 1.1 && aspectRatio < 10.0 && newFillRatio > 0.2)
                     merged.Add(new Rectangle(minX, minY, w, h));
             }
 
@@ -643,14 +594,80 @@ namespace BarcodeProject.Core
             }
         }
 
+        private int[,] FilterNoiseContours(int[,] edges)
+        {
+            int width = edges.GetLength(0);
+            int height = edges.GetLength(1);
+            int[,] filtered = new int[width, height];
+            bool[,] visited = new bool[width, height];
+            int minContourSize = Math.Max(10, Math.Min(width, height) / 50); // Minimum size for contours
+            float minAspectRatio = 2.0f; // Minimum aspect ratio for barcode-like lines
+
+            for (int y = 0; y < height; y++)
+            {
+                for (int x = 0; x < width; x++)
+                {
+                    if (edges[x, y] == 255 && !visited[x, y])
+                    {
+                        int minX = x, maxX = x, minY = y, maxY = y;
+                        int pixelCount = 0;
+                        var stack = new Stack<Point>();
+                        stack.Push(new Point(x, y));
+                        visited[x, y] = true;
+
+                        while (stack.Count > 0)
+                        {
+                            var p = stack.Pop();
+                            pixelCount++;
+                            if (p.X < minX) minX = p.X;
+                            if (p.X > maxX) maxX = p.X;
+                            if (p.Y < minY) minY = p.Y;
+                            if (p.Y > maxY) maxY = p.Y;
+
+                            for (int dy = -1; dy <= 1; dy++)
+                                for (int dx = -1; dx <= 1; dx++)
+                                {
+                                    int nx = p.X + dx;
+                                    int ny = p.Y + dy;
+                                    if (nx >= 0 && nx < width && ny >= 0 && ny < height &&
+                                        edges[nx, ny] == 255 && !visited[nx, ny])
+                                    {
+                                        stack.Push(new Point(nx, ny));
+                                        visited[nx, ny] = true;
+                                    }
+                                }
+                        }
+
+                        int w = maxX - minX + 1;
+                        int h = maxY - minY + 1;
+                        float aspectRatio = w / (float)h;
+
+                        // Keep contours that are large enough and have a barcode-like aspect ratio
+                        bool isValid = pixelCount > minContourSize && (aspectRatio > minAspectRatio || 1.0f / aspectRatio > minAspectRatio);
+
+                        if (isValid)
+                        {
+                            for (int ny = Math.Max(0, minY); ny <= Math.Min(height - 1, maxY); ny++)
+                                for (int nx = Math.Max(0, minX); nx <= Math.Min(width - 1, maxX); nx++)
+                                    if (edges[nx, ny] == 255 && visited[nx, ny])
+                                        filtered[nx, ny] = 255;
+                        }
+                    }
+                }
+            }
+
+            SaveArrayAsImage(filtered, "3.5_filtered_edges.png");
+            return filtered;
+        }
+
         public Rectangle DetectBarcodeRegion()
         {
             int[,] enhanced = EnhanceContrast(_grayImage);
             bool isLowContrast = IsLowContrast(_grayImage);
 
             int[,] edges = CannyEdgeDetection(isLowContrast ? enhanced : _grayImage, sigma: 1.5, lowThreshold: 50, highThreshold: 100);
-            int[,] closed = MorphologicalClosing(edges);
-
+            int[,] filteredEdges = FilterNoiseContours(edges); // Apply noise filtering
+            int[,] closed = MorphologicalClosing(filteredEdges);
             var contours = FindContours(closed);
 
             if (contours.Length == 0)
@@ -659,7 +676,8 @@ namespace BarcodeProject.Core
                 {
                     int[,] highPass = ApplyHighPassFilter(enhanced);
                     edges = CannyEdgeDetection(highPass, sigma: 1.4, lowThreshold: 50, highThreshold: 100);
-                    closed = MorphologicalClosing(edges);
+                    filteredEdges = FilterNoiseContours(edges); // Apply noise filtering again
+                    closed = MorphologicalClosing(filteredEdges);
                     contours = FindContours(closed);
                 }
                 _barcodeRegion = Rectangle.Empty;
@@ -698,7 +716,7 @@ namespace BarcodeProject.Core
                 return new Bitmap(result);
             }
         }
-
+       
         public int[] GetProfileFromRegion(Rectangle region)
         {
             try
@@ -818,7 +836,6 @@ namespace BarcodeProject.Core
                 throw;
             }
         }
-
 
         private int[,] SuperResolution(int[,] input, int scaleFactor = 2)
         {

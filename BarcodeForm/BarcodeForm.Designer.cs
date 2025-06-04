@@ -28,6 +28,7 @@
         /// </summary>
         private void InitializeComponent()
         {
+            System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager(typeof(BarcodeForm));
             this.pictureBox = new System.Windows.Forms.PictureBox();
             this.menuStrip1 = new System.Windows.Forms.MenuStrip();
             this.файлToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
@@ -40,16 +41,18 @@
             this.label1 = new System.Windows.Forms.Label();
             this.fileSystemWatcher1 = new System.IO.FileSystemWatcher();
             this.rtbResult = new System.Windows.Forms.RichTextBox();
+            this.compressedPictureBox = new System.Windows.Forms.PictureBox();
             ((System.ComponentModel.ISupportInitialize)(this.pictureBox)).BeginInit();
             this.menuStrip1.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)(this.fileSystemWatcher1)).BeginInit();
+            ((System.ComponentModel.ISupportInitialize)(this.compressedPictureBox)).BeginInit();
             this.SuspendLayout();
             // 
             // pictureBox
             // 
-            this.pictureBox.Location = new System.Drawing.Point(28, 39);
+            this.pictureBox.Location = new System.Drawing.Point(12, 39);
             this.pictureBox.Name = "pictureBox";
-            this.pictureBox.Size = new System.Drawing.Size(831, 623);
+            this.pictureBox.Size = new System.Drawing.Size(847, 645);
             this.pictureBox.TabIndex = 0;
             this.pictureBox.TabStop = false;
             // 
@@ -60,7 +63,7 @@
             this.опцииToolStripMenuItem});
             this.menuStrip1.Location = new System.Drawing.Point(0, 0);
             this.menuStrip1.Name = "menuStrip1";
-            this.menuStrip1.Size = new System.Drawing.Size(1088, 24);
+            this.menuStrip1.Size = new System.Drawing.Size(1194, 24);
             this.menuStrip1.TabIndex = 1;
             this.menuStrip1.Text = "menuStrip1";
             // 
@@ -91,21 +94,21 @@
             // btnHighlightBarcode
             // 
             this.btnHighlightBarcode.Name = "btnHighlightBarcode";
-            this.btnHighlightBarcode.Size = new System.Drawing.Size(157, 22);
+            this.btnHighlightBarcode.Size = new System.Drawing.Size(180, 22);
             this.btnHighlightBarcode.Text = "Распознать";
             this.btnHighlightBarcode.Click += new System.EventHandler(this.btnHighlightBarcode_Click);
             // 
             // btnDecodeBarcode
             // 
             this.btnDecodeBarcode.Name = "btnDecodeBarcode";
-            this.btnDecodeBarcode.Size = new System.Drawing.Size(157, 22);
+            this.btnDecodeBarcode.Size = new System.Drawing.Size(180, 22);
             this.btnDecodeBarcode.Text = "Расшифровать";
             this.btnDecodeBarcode.Click += new System.EventHandler(this.btnDecodeBarcode_Click);
             // 
             // lblResult
             // 
             this.lblResult.AutoSize = true;
-            this.lblResult.Location = new System.Drawing.Point(865, 93);
+            this.lblResult.Location = new System.Drawing.Point(878, 93);
             this.lblResult.Name = "lblResult";
             this.lblResult.Size = new System.Drawing.Size(62, 13);
             this.lblResult.TabIndex = 2;
@@ -117,16 +120,16 @@
             this.cmbBarcodeType.Items.AddRange(new object[] {
             "EAN-13",
             "Code 128"});
-            this.cmbBarcodeType.Location = new System.Drawing.Point(865, 53);
+            this.cmbBarcodeType.Location = new System.Drawing.Point(881, 53);
             this.cmbBarcodeType.Name = "cmbBarcodeType";
-            this.cmbBarcodeType.Size = new System.Drawing.Size(211, 21);
+            this.cmbBarcodeType.Size = new System.Drawing.Size(291, 21);
             this.cmbBarcodeType.TabIndex = 5;
             this.cmbBarcodeType.Text = "EAN-13";
             // 
             // label1
             // 
             this.label1.AutoSize = true;
-            this.label1.Location = new System.Drawing.Point(862, 37);
+            this.label1.Location = new System.Drawing.Point(878, 37);
             this.label1.Name = "label1";
             this.label1.Size = new System.Drawing.Size(89, 13);
             this.label1.TabIndex = 6;
@@ -139,29 +142,42 @@
             // 
             // rtbResult
             // 
-            this.rtbResult.Location = new System.Drawing.Point(865, 109);
+            this.rtbResult.Location = new System.Drawing.Point(881, 109);
             this.rtbResult.Name = "rtbResult";
-            this.rtbResult.Size = new System.Drawing.Size(211, 269);
+            this.rtbResult.Size = new System.Drawing.Size(291, 260);
             this.rtbResult.TabIndex = 10;
             this.rtbResult.Text = "";
+            // 
+            // compressedPictureBox
+            // 
+            this.compressedPictureBox.Location = new System.Drawing.Point(881, 375);
+            this.compressedPictureBox.Name = "compressedPictureBox";
+            this.compressedPictureBox.Size = new System.Drawing.Size(291, 315);
+            this.compressedPictureBox.SizeMode = System.Windows.Forms.PictureBoxSizeMode.Zoom;
+            this.compressedPictureBox.TabIndex = 11;
+            this.compressedPictureBox.TabStop = false;
             // 
             // BarcodeForm
             // 
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
-            this.ClientSize = new System.Drawing.Size(1088, 674);
+            this.ClientSize = new System.Drawing.Size(1194, 702);
+            this.Controls.Add(this.compressedPictureBox);
             this.Controls.Add(this.rtbResult);
             this.Controls.Add(this.label1);
             this.Controls.Add(this.cmbBarcodeType);
             this.Controls.Add(this.lblResult);
             this.Controls.Add(this.pictureBox);
             this.Controls.Add(this.menuStrip1);
+            this.Icon = ((System.Drawing.Icon)(resources.GetObject("$this.Icon")));
             this.MainMenuStrip = this.menuStrip1;
             this.Name = "BarcodeForm";
+            this.Text = "Сканер штрих-кодов";
             ((System.ComponentModel.ISupportInitialize)(this.pictureBox)).EndInit();
             this.menuStrip1.ResumeLayout(false);
             this.menuStrip1.PerformLayout();
             ((System.ComponentModel.ISupportInitialize)(this.fileSystemWatcher1)).EndInit();
+            ((System.ComponentModel.ISupportInitialize)(this.compressedPictureBox)).EndInit();
             this.ResumeLayout(false);
             this.PerformLayout();
 
@@ -181,6 +197,7 @@
         private System.Windows.Forms.ToolStripMenuItem btnDecodeBarcode;
         private System.IO.FileSystemWatcher fileSystemWatcher1;
         private System.Windows.Forms.RichTextBox rtbResult;
+        private System.Windows.Forms.PictureBox compressedPictureBox;
     }
 }
 

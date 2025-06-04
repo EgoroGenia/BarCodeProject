@@ -5,6 +5,7 @@ using BarcodeProject.Core;
 using System.IO;
 using System.Linq;
 using System.Collections.Generic;
+using System.Drawing.Imaging;
 
 namespace BarcodeDecoderWinForms
 {
@@ -32,6 +33,7 @@ namespace BarcodeDecoderWinForms
                 if (openFileDialog.ShowDialog() == DialogResult.OK)
                 {
                     _originalImage = new Bitmap(openFileDialog.FileName);
+                    compressedPictureBox.Image = null; // Очищаем сжатое изображение
                     pictureBox.Image = new Bitmap(_originalImage);
                     rtbResult.Clear(); // Очищаем RichTextBox
                     rtbResult.Text = "Изображение загружено.";
@@ -70,7 +72,8 @@ namespace BarcodeDecoderWinForms
 
             try
             {
-                rtbResult.AppendText("\r\nИзображения сохранены: 1_grayscale.png, 1a_clahe.png, 2_blurred.png, 3_gradient.png, 4_morphological.png, 5_threshold.png, 5a_contours.png, 6_highlighted.png");
+                UpdateCompressedPictureBox();
+                //rtbResult.AppendText("\r\nИзображения сохранены: 1_grayscale.png, 1a_clahe.png, 2_blurred.png, 3_gradient.png, 4_morphological.png, 5_threshold.png, 5a_contours.png, 6_highlighted.png");
             }
             catch (Exception ex)
             {
@@ -127,15 +130,6 @@ namespace BarcodeDecoderWinForms
                         $"Валидность: {isValid}\r\n" +
                         $"ModuleSize: {moduleSize:F2}\r\n" +
                         $"Общее количество модулей: {bitString.Length}");
-
-                    rtbResult.AppendText($"\r\nБинарный профиль сохранён в binary_profile.txt");
-                    rtbResult.AppendText($"\r\nRLE сохранён в rle_debug.txt");
-                    rtbResult.AppendText($"\r\nОбрезанный RLE сохранён в rle_trimmed.txt");
-                    rtbResult.AppendText($"\r\nДлина профиля: {profile.Length}");
-                    rtbResult.AppendText($"\r\nДлина битовой строки: {bitString.Length}");
-                    rtbResult.AppendText($"\r\nПервые 20 символов битовой строки: {(bitString.Length > 0 ? bitString.Substring(0, Math.Min(20, bitString.Length)) : "Пустая строка")}");
-                    rtbResult.AppendText($"\r\nВалидность: {isValid}");
-                    rtbResult.AppendText($"\r\nModuleSize: {moduleSize:F2}");
                 }
                 catch (Exception ex)
                 {
@@ -151,43 +145,89 @@ namespace BarcodeDecoderWinForms
                 rtbResult.Text = $"Ошибка при декодировании: {ex.Message}";
             }
         }
-
-        // Вспомогательный метод для вычисления moduleSize (для отладки)
-        private static double CalculateModuleSize(List<(int value, int length)> rle, string barcodeType)
+        private void UpdateCompressedPictureBox()
         {
-            var lengths = rle.Select(item => item.length).Where(l => l > 0).ToList();
-            if (lengths.Count == 0) return 0;
+            if (_barcodeImage == null || _originalImage == null)
+            {
+                rtbResult.AppendText("\r\nСначала загрузите изображение.");
+                compressedPictureBox.Image = null; // Очищаем compressedPictureBox
+                return;
+            }
 
-            double moduleSize = lengths.Median();
-            if (barcodeType == "EAN-13" && rle.Count >= 3)
+            // Получаем максимальные размеры compressedPictureBox
+            int maxWidth = compressedPictureBox.Width;
+            int maxHeight = compressedPictureBox.Height;
+
+            // Рассчитываем пропорции исходного изображения
+            float aspectRatio = (float)_originalImage.Width / _originalImage.Height;
+
+            // Рассчитываем новые размеры, чтобы изображение вписывалось в compressedPictureBox
+            int targetWidth, targetHeight;
+            if (aspectRatio > (float)maxWidth / maxHeight)
             {
-                var startGuardRle = rle.Take(3).ToList();
-                double guardModuleSize = startGuardRle.Sum(item => item.length) / 3.0;
-                moduleSize = Math.Max(moduleSize, guardModuleSize);
+                // Если изображение шире, ограничиваем по ширине
+                targetWidth = maxWidth;
+                targetHeight = (int)(targetWidth / aspectRatio);
             }
-            else if (barcodeType == "Code128" && rle.Count >= 4)
+            else
             {
-                var startGuardRle = rle.Take(4).ToList();
-                double guardModuleSize = startGuardRle.Sum(item => item.length) / 4.0;
-                moduleSize = Math.Max(moduleSize, guardModuleSize);
+                // Если изображение выше, ограничиваем по высоте
+                targetHeight = maxHeight;
+                targetWidth = (int)(targetHeight * aspectRatio);
             }
-            return moduleSize < 1 ? 1 : moduleSize;
+
+            // Проверяем, чтобы размеры были положительными
+            if (targetWidth <= 0 || targetHeight <= 0)
+            {
+                rtbResult.AppendText("\r\nОшибка: размеры сжатого изображения недопустимы.");
+                compressedPictureBox.Image = null;
+                return;
+            }
+
+            // Создаём сжатое изображение
+            using (Bitmap resizedImage = new Bitmap(targetWidth, targetHeight))
+            {
+                // Используем Graphics для высококачественного масштабирования
+                using (Graphics g = Graphics.FromImage(resizedImage))
+                {
+                    g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                    g.DrawImage(_originalImage, 0, 0, targetWidth, targetHeight);
+                }
+
+                // Создаём копию для нанесения выделения
+                Bitmap highlightedResized = new Bitmap(resizedImage);
+                if (_barcodeRegion != Rectangle.Empty)
+                {
+                    // Масштабируем регион штрих-кода
+                    float scaleX = (float)targetWidth / _originalImage.Width;
+                    float scaleY = (float)targetHeight / _originalImage.Height;
+                    Rectangle scaledRegion = new Rectangle(
+                        (int)(_barcodeRegion.X * scaleX),
+                        (int)(_barcodeRegion.Y * scaleY),
+                        (int)(_barcodeRegion.Width * scaleX),
+                        (int)(_barcodeRegion.Height * scaleY));
+
+                    // Рисуем выделение
+                    using (Graphics g = Graphics.FromImage(highlightedResized))
+                    using (Pen pen = new Pen(Color.Red, 1)) // Тонкая линия для сжатого изображения
+                    {
+                        g.DrawRectangle(pen, scaledRegion);
+                    }
+                }
+
+                // Устанавливаем изображение в compressedPictureBox
+                compressedPictureBox.Image = new Bitmap(highlightedResized);
+
+                // Сохраняем сжатое изображение
+                try
+                {
+                    highlightedResized.Save("6_compressed_highlighted.png", ImageFormat.Png);
+                }
+                catch (Exception ex)
+                {
+                    rtbResult.AppendText($"\r\nОшибка при сохранении сжатого изображения: {ex.Message}");
+                }
+            }
         }
-
-        // Вспомогательный метод для вычисления общего количества модулей (для отладки)
-        private static int CalculateTotalModules(List<(int value, int length)> rle, string barcodeType)
-        {
-            double moduleSize = CalculateModuleSize(rle, barcodeType);
-            int totalModules = 0;
-            foreach (var item in rle)
-            {
-                double normalized = item.length / moduleSize;
-                int modules = (int)Math.Round(normalized);
-                if (modules < 1) modules = 1;
-                totalModules += modules;
-            }
-            return totalModules;
-        }
-
     }
 }
